@@ -4,10 +4,12 @@ HS Code: {hs_code}
 Product: {keyword}
 Country/Region: {country}
 
-Return a structured list of:
+Return a numbered list of at least 10 (but no more than 20) real, verifiable, and currently active companies. For each, provide:
 - Company Name
 - Country
 - Website or Contact Email (if publicly available)
 - Brief Description (if any)
 
-Only return real information. If none is found, respond: "No verified buyers found." 
+If fewer than 10 are found, return as many as possible. Only return real information. If none is found, respond: "No verified buyers found."
+
+Prioritize companies with recent activity in the last 3 years. Focus on importers, distributors, or buyers, not manufacturers. 
