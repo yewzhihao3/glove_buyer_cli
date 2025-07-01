@@ -1,0 +1,133 @@
+import typer
+from rich.console import Console
+import sys
+sys.path.append("..")  # Ensure parent dir is in path for imports
+from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
+from rich.table import Table
+
+app = typer.Typer()
+console = Console()
+
+MENU_OPTIONS = [
+    "Select HS Code to Search",
+    "Manage HS Codes (CRUD)",
+    "View Past Results",
+    "Export Results (CSV)",
+    "Exit"
+]
+
+def hs_code_crud_menu():
+    crud_options = [
+        "Add New HS Code",
+        "Edit Existing HS Code",
+        "Delete HS Code",
+        "View All HS Codes",
+        "Back to Main Menu"
+    ]
+    console.rule("[bold magenta]HS Code Management[/bold magenta]")
+    for idx, option in enumerate(crud_options, 1):
+        console.print(f"[cyan]{idx}.[/cyan] {option}")
+    choice = typer.prompt("\nSelect an option", type=int)
+    return choice
+
+def main_menu():
+    console.rule("[bold blue]🧠 Glove Buyer Intel CLI 🧠")
+    for idx, option in enumerate(MENU_OPTIONS, 1):
+        console.print(f"[cyan]{idx}.[/cyan] {option}")
+    choice = typer.prompt("\nSelect an option", type=int)
+    return choice
+
+@app.command()
+def run():
+    while True:
+        choice = main_menu()
+        if choice == 1:
+            codes = load_hs_codes_xlsx()
+            selected = select_hs_code(codes)
+            if selected:
+                code, desc = selected
+                console.print(f"[green]Selected HS Code:[/green] [bold]{code}[/bold] - {desc}")
+            else:
+                console.print("[red]No HS code selected.[/red]")
+        elif choice == 2:
+            while True:
+                crud_choice = hs_code_crud_menu()
+                if crud_choice == 1:
+                    code = typer.prompt("Enter new HS Code")
+                    desc = typer.prompt("Enter description")
+                    success = add_hs_code(code, desc)
+                    if success:
+                        console.print(f"[green]HS Code {code} - {desc} added successfully![/green]")
+                    else:
+                        console.print(f"[red]HS Code {code} - {desc} already exists or could not be added.[/red]")
+                elif crud_choice == 2:
+                    codes = load_hs_codes_xlsx()
+                    if not codes:
+                        console.print("[red]No HS codes to edit.[/red]")
+                        continue
+                    console.print("[bold]Select HS code to edit:[/bold]")
+                    for idx, (code, desc) in enumerate(codes, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
+                    idx = typer.prompt("Enter number to edit", type=int)
+                    if 1 <= idx <= len(codes):
+                        old_code, old_desc = codes[idx-1]
+                        new_code = typer.prompt("Enter new HS Code", default=old_code)
+                        new_desc = typer.prompt("Enter new description", default=old_desc)
+                        success = edit_hs_code(idx, new_code, new_desc)
+                        if success:
+                            console.print(f"[green]HS Code updated to: {new_code} - {new_desc}[/green]")
+                        else:
+                            console.print("[red]Failed to update HS Code.[/red]")
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                elif crud_choice == 3:
+                    codes = load_hs_codes_xlsx()
+                    if not codes:
+                        console.print("[red]No HS codes to delete.[/red]")
+                        continue
+                    console.print("[bold]Select HS code to delete:[/bold]")
+                    for idx, (code, desc) in enumerate(codes, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
+                    idx = typer.prompt("Enter number to delete", type=int)
+                    if 1 <= idx <= len(codes):
+                        code, desc = codes[idx-1]
+                        confirm = typer.confirm(f"Are you sure you want to delete {code} - {desc}?", default=False)
+                        if confirm:
+                            success = delete_hs_code(idx)
+                            if success:
+                                console.print(f"[green]HS Code {code} - {desc} deleted.[/green]")
+                            else:
+                                console.print("[red]Failed to delete HS Code.[/red]")
+                        else:
+                            console.print("[yellow]Delete cancelled.[/yellow]")
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                elif crud_choice == 4:
+                    codes = load_hs_codes_xlsx()
+                    if not codes:
+                        console.print("[red]No HS codes found.[/red]")
+                    else:
+                        table = Table(title="HS Codes List")
+                        table.add_column("No.", style="cyan", justify="right")
+                        table.add_column("HS Code", style="magenta")
+                        table.add_column("Description", style="green")
+                        for idx, (code, desc) in enumerate(codes, 1):
+                            table.add_row(str(idx), code, desc)
+                        console.print(table)
+                    # Future enhancement: Add search/filter functionality here
+                elif crud_choice == 5:
+                    break
+                else:
+                    console.print("[red]Invalid option. Please try again.[/red]")
+        elif choice == 3:
+            console.print("[yellow]Feature coming soon: View Past Results[/yellow]")
+        elif choice == 4:
+            console.print("[yellow]Feature coming soon: Export Results (CSV)[/yellow]")
+        elif choice == 5:
+            console.print("[green]Goodbye!")
+            break
+        else:
+            console.print("[red]Invalid option. Please try again.[/red]")
+
+if __name__ == "__main__":
+    app() 
