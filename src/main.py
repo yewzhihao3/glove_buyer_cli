@@ -1,6 +1,7 @@
 import typer
 from rich.console import Console
 import sys
+import os
 sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
@@ -39,6 +40,10 @@ def main_menu():
     choice = typer.prompt("\nSelect an option", type=int)
     return choice
 
+def load_country_list(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return [line.strip() for line in f if line.strip()]
+
 @app.command()
 def run():
     while True:
@@ -52,6 +57,34 @@ def run():
             else:
                 console.print("[red]No HS code selected.[/red]")
         elif choice == 2:
+            # Scope selection
+            console.print("[bold]Choose search scope:[/bold]")
+            console.print("[cyan]1.[/cyan] Asia")
+            console.print("[cyan]2.[/cyan] Global")
+            scope = typer.prompt("Enter number for scope", type=int)
+            if scope == 1:
+                country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                scope_name = "Asia"
+            elif scope == 2:
+                country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                scope_name = "Global"
+            else:
+                console.print("[red]Invalid scope selection.[/red]")
+                continue
+            # Country selection
+            console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
+            for idx, country in enumerate(country_list, 1):
+                console.print(f"[cyan]{idx}.[/cyan] {country}")
+            console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Enter a custom country[/italic]")
+            country_idx = typer.prompt("Enter number to select country or custom", type=int)
+            if 1 <= country_idx <= len(country_list):
+                country = country_list[country_idx-1]
+            elif country_idx == len(country_list)+1:
+                country = typer.prompt("Enter custom country name")
+            else:
+                console.print("[red]Invalid country selection.[/red]")
+                continue
+            # HS code selection
             codes = load_hs_codes_xlsx()
             if not codes:
                 console.print("[red]No HS codes available.")
@@ -62,10 +95,10 @@ def run():
             idx = typer.prompt("Enter number to search", type=int)
             if 1 <= idx <= len(codes):
                 hs_code, desc = codes[idx-1]
-                keyword = typer.prompt("Enter product keyword", default="glove")
-                console.print(f"[yellow]Searching buyers for HS Code {hs_code} ({desc}) with keyword '{keyword}'...[/yellow]")
+                keyword = typer.prompt("Enter product keyword (press Enter to use 'glove')", default="glove")
+                console.print(f"[yellow]Searching buyers for HS Code {hs_code} ({desc}) in {country} with keyword '{keyword}'...[/yellow]")
                 try:
-                    result = query_deepseek(hs_code, keyword)
+                    result = query_deepseek(hs_code, keyword, country)
                     console.print("[bold green]DeepSeek Results:[/bold green]")
                     console.print(result)
                 except Exception as e:

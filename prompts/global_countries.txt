@@ -1,0 +1,36 @@
+USA
+Germany
+United Kingdom
+France
+Italy
+Spain
+Canada
+Australia
+Brazil
+Mexico
+Russia
+Turkey
+Netherlands
+Switzerland
+Sweden
+Norway
+Denmark
+Finland
+Poland
+Austria
+Belgium
+South Africa
+Egypt
+Saudi Arabia
+UAE
+Argentina
+Chile
+New Zealand
+Ireland
+Portugal
+Greece
+Czech Republic
+Hungary
+Romania
+Israel
+Ukraine 

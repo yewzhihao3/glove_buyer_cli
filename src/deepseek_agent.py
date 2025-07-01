@@ -8,14 +8,14 @@ def load_prompt_template():
     with open(PROMPT_PATH, 'r', encoding='utf-8') as f:
         return f.read()
 
-def query_deepseek(hs_code: str, keyword: str) -> str:
+def query_deepseek(hs_code: str, keyword: str, country: str) -> str:
     load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'config', '.env'))
     api_key = os.getenv('DEEPSEEK_API_KEY')
     api_url = os.getenv('DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/chat/completions')
     if not api_key:
         raise ValueError('DEEPSEEK_API_KEY not found in environment.')
     prompt_template = load_prompt_template()
-    prompt = prompt_template.format(hs_code=hs_code, keyword=keyword)
+    prompt = prompt_template.format(hs_code=hs_code, keyword=keyword, country=country)
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json',
