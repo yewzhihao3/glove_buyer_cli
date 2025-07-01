@@ -4,12 +4,14 @@ import sys
 sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
+from deepseek_agent import query_deepseek
 
 app = typer.Typer()
 console = Console()
 
 MENU_OPTIONS = [
     "Select HS Code to Search",
+    "Search Buyers with DeepSeek",
     "Manage HS Codes (CRUD)",
     "View Past Results",
     "Export Results (CSV)",
@@ -50,6 +52,27 @@ def run():
             else:
                 console.print("[red]No HS code selected.[/red]")
         elif choice == 2:
+            codes = load_hs_codes_xlsx()
+            if not codes:
+                console.print("[red]No HS codes available.")
+                continue
+            console.print("[bold]Select HS code to search for buyers:[/bold]")
+            for idx, (code, desc) in enumerate(codes, 1):
+                console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
+            idx = typer.prompt("Enter number to search", type=int)
+            if 1 <= idx <= len(codes):
+                hs_code, desc = codes[idx-1]
+                keyword = typer.prompt("Enter product keyword", default="glove")
+                console.print(f"[yellow]Searching buyers for HS Code {hs_code} ({desc}) with keyword '{keyword}'...[/yellow]")
+                try:
+                    result = query_deepseek(hs_code, keyword)
+                    console.print("[bold green]DeepSeek Results:[/bold green]")
+                    console.print(result)
+                except Exception as e:
+                    console.print(f"[red]Error: {e}[/red]")
+            else:
+                console.print("[red]Invalid selection.[/red]")
+        elif choice == 3:
             while True:
                 crud_choice = hs_code_crud_menu()
                 if crud_choice == 1:
@@ -119,11 +142,11 @@ def run():
                     break
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")
-        elif choice == 3:
-            console.print("[yellow]Feature coming soon: View Past Results[/yellow]")
         elif choice == 4:
-            console.print("[yellow]Feature coming soon: Export Results (CSV)[/yellow]")
+            console.print("[yellow]Feature coming soon: View Past Results[/yellow]")
         elif choice == 5:
+            console.print("[yellow]Feature coming soon: Export Results (CSV)[/yellow]")
+        elif choice == 6:
             console.print("[green]Goodbye!")
             break
         else:
