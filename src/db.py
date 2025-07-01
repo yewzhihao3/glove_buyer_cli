@@ -1,0 +1,103 @@
+import os
+import sqlite3
+from typing import List, Dict
+
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'results.db')
+
+def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT,
+            keyword TEXT,
+            country TEXT,
+            company_name TEXT,
+            company_country TEXT,
+            company_website_link TEXT,
+            description TEXT,
+            source TEXT,
+            UNIQUE(hs_code, keyword, country, company_name)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def insert_results(hs_code: str, keyword: str, country: str, companies: List[Dict]):
+    """
+    Insert a list of company dicts into the database. Each dict should have:
+    company_name, company_country, company_website_link, description
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    for company in companies:
+        c.execute('''
+            INSERT OR IGNORE INTO results
+            (hs_code, keyword, country, company_name, company_country, company_website_link, description, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            hs_code,
+            keyword,
+            country,
+            company.get('company_name', ''),
+            company.get('company_country', ''),
+            company.get('company_website_link', ''),
+            company.get('description', ''),
+            'DeepSeek R1'
+        ))
+    conn.commit()
+    conn.close()
+
+def parse_deepseek_output(output: str) -> List[Dict]:
+    """
+    Parse DeepSeek output into a list of company dicts.
+    Handles:
+    - Markdown-style output with numbered company blocks and fields, with colon inside or outside bold.
+    - Company name as bolded header (e.g., 1. **PT Medisafe Technologies**)
+    - Fields like '**Company Name**: Value' (extracts value after colon)
+    Captures multi-line descriptions and brief descriptions. Cleans website/email fields.
+    """
+    import re
+    companies = []
+    # Split into blocks by numbered list (e.g., 1. **Company Name**...)
+    blocks = re.split(r'\n\d+\. ', '\n' + output)
+    for block in blocks:
+        if not block.strip():
+            continue
+        company = {}
+        # Company Name: match '**Company Name**: Value' or bolded header
+        m = re.search(r'\*\*Company Name\*\*:?\s*:?(.*)', block)
+        if m and m.group(1).strip():
+            company['company_name'] = m.group(1).strip().replace('\n', ' ')
+        else:
+            m = re.match(r'\*\*(.+?)\*\*', block)
+            if m:
+                company['company_name'] = m.group(1).strip().replace('\n', ' ')
+        # Country
+        m = re.search(r'\*\*Country\*\*:?\s*:?(.*)', block)
+        if m and m.group(1).strip():
+            company['company_country'] = m.group(1).strip()
+        # Website: extract only the first valid URL after '**Website**:'
+        m = re.search(r'\*\*Website\*\*:?\s*:?(.*)', block)
+        if m and m.group(1).strip():
+            url_match = re.search(r'(https?://[\w\.-]+[\w\d/#?&=\.-]*)', m.group(1))
+            if url_match:
+                company['company_website_link'] = url_match.group(1).strip()
+        # Multi-line Description or Brief Description (prefer Description, fallback to Brief Description)
+        desc_match = re.search(r'\*\*Description\*\*:?\s*:?(.*?)(?=\n- \*\*|$)', block, re.DOTALL)
+        if desc_match and desc_match.group(1).strip():
+            description = desc_match.group(1).strip()
+            description = '\n'.join(line.lstrip('-').strip() for line in description.splitlines() if line.strip())
+            company['description'] = description
+        else:
+            desc_match = re.search(r'\*\*Brief Description\*\*:?\s*:?(.*?)(?=\n- \*\*|$)', block, re.DOTALL)
+            if desc_match and desc_match.group(1).strip():
+                description = desc_match.group(1).strip()
+                description = '\n'.join(line.lstrip('-').strip() for line in description.splitlines() if line.strip())
+                company['description'] = description
+        if company.get('company_name'):
+            companies.append(company)
+    print("DEBUG: Parsed company names:", [c['company_name'] for c in companies])
+    return companies 

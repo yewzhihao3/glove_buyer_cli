@@ -6,6 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek
+from db import init_db, insert_results, parse_deepseek_output
 
 app = typer.Typer()
 console = Console()
@@ -46,6 +47,7 @@ def load_country_list(path):
 
 @app.command()
 def run():
+    init_db()
     while True:
         choice = main_menu()
         if choice == 1:
@@ -101,6 +103,11 @@ def run():
                     result = query_deepseek(hs_code, keyword, country)
                     console.print("[bold green]DeepSeek Results:[/bold green]")
                     console.print(result)
+                    # Save to DB
+                    companies = parse_deepseek_output(result)
+                    console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                    insert_results(hs_code, keyword, country, companies)
+                    console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
                 except Exception as e:
                     console.print(f"[red]Error: {e}[/red]")
             else:
