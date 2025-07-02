@@ -97,7 +97,22 @@ def run():
             idx = typer.prompt("Enter number to search", type=int)
             if 1 <= idx <= len(codes):
                 hs_code, desc = codes[idx-1]
-                keyword = typer.prompt("Enter product keyword (press Enter to use 'glove')", default="glove")
+                # Load keyword options from file
+                keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
+                with open(keyword_file, 'r', encoding='utf-8') as f:
+                    keyword_options = [line.strip() for line in f if line.strip()]
+                console.print("[bold]Select product keyword:[/bold]")
+                for kidx, keyword_option in enumerate(keyword_options, 1):
+                    console.print(f"[cyan]{kidx}.[/cyan] {keyword_option.title()}")
+                console.print(f"[cyan]{len(keyword_options)+1}.[/cyan] [italic]Custom Keyword[/italic]")
+                keyword_choice = typer.prompt("Enter number to select keyword or custom", type=int)
+                if 1 <= keyword_choice <= len(keyword_options):
+                    keyword = keyword_options[keyword_choice-1]
+                elif keyword_choice == len(keyword_options)+1:
+                    keyword = typer.prompt("Enter custom product keyword")
+                else:
+                    console.print("[red]Invalid keyword selection.[/red]")
+                    continue
                 console.print(f"[yellow]Searching buyers for HS Code {hs_code} ({desc}) in {country} with keyword '{keyword}'...[/yellow]")
                 try:
                     result = query_deepseek(hs_code, keyword, country)
