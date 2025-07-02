@@ -60,6 +60,8 @@ def parse_deepseek_output(output: str) -> List[Dict]:
     Captures multi-line descriptions and brief descriptions. Cleans website/email fields.
     """
     import re
+    # Remove all Markdown bold formatting
+    output = output.replace('**', '')
     companies = []
     # Split into blocks by numbered list (e.g., 1. **Company Name**...)
     blocks = re.split(r'\n\d+\. ', '\n' + output)
@@ -67,32 +69,32 @@ def parse_deepseek_output(output: str) -> List[Dict]:
         if not block.strip():
             continue
         company = {}
-        # Company Name: match '**Company Name**: Value' or bolded header
-        m = re.search(r'\*\*Company Name\*\*:?\s*:?(.*)', block)
+        # Company Name: match 'Company Name: Value' or header
+        m = re.search(r'Company Name:?.*?([\w\W]*?)(?:\n|$)', block)
         if m and m.group(1).strip():
             company['company_name'] = m.group(1).strip().replace('\n', ' ')
         else:
-            m = re.match(r'\*\*(.+?)\*\*', block)
+            m = re.match(r'(.+)', block)
             if m:
                 company['company_name'] = m.group(1).strip().replace('\n', ' ')
         # Country
-        m = re.search(r'\*\*Country\*\*:?\s*:?(.*)', block)
+        m = re.search(r'Country:?.*?([\w\W]*?)(?:\n|$)', block)
         if m and m.group(1).strip():
             company['company_country'] = m.group(1).strip()
-        # Website: extract only the first valid URL after '**Website**:'
-        m = re.search(r'\*\*Website\*\*:?\s*:?(.*)', block)
+        # Website: extract only the first valid URL after 'Website:'
+        m = re.search(r'Website:?.*?([\w\W]*?)(?:\n|$)', block)
         if m and m.group(1).strip():
             url_match = re.search(r'(https?://[\w\.-]+[\w\d/#?&=\.-]*)', m.group(1))
             if url_match:
                 company['company_website_link'] = url_match.group(1).strip()
         # Multi-line Description or Brief Description (prefer Description, fallback to Brief Description)
-        desc_match = re.search(r'\*\*Description\*\*:?\s*:?(.*?)(?=\n- \*\*|$)', block, re.DOTALL)
+        desc_match = re.search(r'Description:?.*?([\w\W]*?)(?=\n- |$)', block, re.DOTALL)
         if desc_match and desc_match.group(1).strip():
             description = desc_match.group(1).strip()
             description = '\n'.join(line.lstrip('-').strip() for line in description.splitlines() if line.strip())
             company['description'] = description
         else:
-            desc_match = re.search(r'\*\*Brief Description\*\*:?\s*:?(.*?)(?=\n- \*\*|$)', block, re.DOTALL)
+            desc_match = re.search(r'Brief Description:?.*?([\w\W]*?)(?=\n- |$)', block, re.DOTALL)
             if desc_match and desc_match.group(1).strip():
                 description = desc_match.group(1).strip()
                 description = '\n'.join(line.lstrip('-').strip() for line in description.splitlines() if line.strip())
