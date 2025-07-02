@@ -117,4 +117,36 @@ def fetch_all_results():
     columns = [
         'id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source'
     ]
-    return [dict(zip(columns, row)) for row in rows] 
+    return [dict(zip(columns, row)) for row in rows]
+
+def update_result(record_id: int, updated_fields: dict) -> bool:
+    """
+    Update a buyer search history record by its ID. updated_fields is a dict of column:value pairs to update.
+    Returns True if a record was updated, False otherwise.
+    """
+    allowed_fields = {'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source'}
+    set_clause = ', '.join([f"{k} = ?" for k in updated_fields if k in allowed_fields])
+    values = [updated_fields[k] for k in updated_fields if k in allowed_fields]
+    if not set_clause:
+        return False
+    values.append(record_id)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f'UPDATE results SET {set_clause} WHERE id = ?', values)
+    conn.commit()
+    updated = c.rowcount > 0
+    conn.close()
+    return updated
+
+def delete_result(record_id: int) -> bool:
+    """
+    Delete a buyer search history record by its ID.
+    Returns True if a record was deleted, False otherwise.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM results WHERE id = ?', (record_id,))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    return deleted 

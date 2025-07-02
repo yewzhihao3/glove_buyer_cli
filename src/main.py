@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result
 import pandas as pd
 import datetime
 
@@ -17,7 +17,7 @@ MENU_OPTIONS = [
     "Select HS Code to Search",
     "Search Buyers with DeepSeek",
     "Manage HS Codes (CRUD)",
-    "View Buyer Search History",
+    "Manage Buyer Search History",
     "Export Results (CSV)",
     "Exit"
 ]
@@ -31,6 +31,19 @@ def hs_code_crud_menu():
         "Back to Main Menu"
     ]
     console.rule("[bold magenta]HS Code Management[/bold magenta]")
+    for idx, option in enumerate(crud_options, 1):
+        console.print(f"[cyan]{idx}.[/cyan] {option}")
+    choice = typer.prompt("\nSelect an option", type=int)
+    return choice
+
+def buyer_history_crud_menu():
+    crud_options = [
+        "View All Buyer Search History",
+        "Edit Buyer Search Record",
+        "Delete Buyer Search Record",
+        "Back to Main Menu"
+    ]
+    console.rule("[bold magenta]Buyer Search History Management[/bold magenta]")
     for idx, option in enumerate(crud_options, 1):
         console.print(f"[cyan]{idx}.[/cyan] {option}")
     choice = typer.prompt("\nSelect an option", type=int)
@@ -200,31 +213,115 @@ def run():
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")
         elif choice == 4:
-            results = fetch_all_results()
-            if not results:
-                console.print("[red]No past buyer search results found.[/red]")
-            else:
-                table = Table(title="Buyer Search History", show_lines=True)
-                table.add_column("No.", style="cyan", justify="right")
-                table.add_column("HS Code", style="magenta")
-                table.add_column("Keyword", style="yellow")
-                table.add_column("Country", style="green")
-                table.add_column("Company Name", style="bold")
-                table.add_column("Company Country", style="blue")
-                table.add_column("Website", style="underline")
-                table.add_column("Description", style="dim", overflow="fold")
-                for idx, row in enumerate(results, 1):
-                    table.add_row(
-                        str(idx),
-                        row['hs_code'],
-                        row['keyword'],
-                        row['country'],
-                        row['company_name'],
-                        row['company_country'],
-                        row['company_website_link'],
-                        (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
-                    )
-                console.print(table)
+            while True:
+                crud_choice = buyer_history_crud_menu()
+                if crud_choice == 1:
+                    results = fetch_all_results()
+                    if not results:
+                        console.print("[red]No past buyer search results found.[/red]")
+                    else:
+                        table = Table(title="Buyer Search History", show_lines=True)
+                        table.add_column("No.", style="cyan", justify="right")
+                        table.add_column("HS Code", style="magenta")
+                        table.add_column("Keyword", style="yellow")
+                        table.add_column("Country", style="green")
+                        table.add_column("Company Name", style="bold")
+                        table.add_column("Company Country", style="blue")
+                        table.add_column("Website", style="underline")
+                        table.add_column("Description", style="dim", overflow="fold")
+                        for idx, row in enumerate(results, 1):
+                            table.add_row(
+                                str(idx),
+                                row['hs_code'],
+                                row['keyword'],
+                                row['country'],
+                                row['company_name'],
+                                row['company_country'],
+                                row['company_website_link'],
+                                (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                            )
+                        console.print(table)
+                elif crud_choice == 2:
+                    results = fetch_all_results()
+                    if not results:
+                        console.print("[red]No records to edit.[/red]")
+                        continue
+                    for idx, row in enumerate(results, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row['country']})")
+                    idx = typer.prompt("Enter number to edit", type=int)
+                    if 1 <= idx <= len(results):
+                        record = results[idx-1]
+                        fields = ['hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description']
+                        field_names = [f.replace('_', ' ').title() for f in fields]
+                        console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
+                        console.print("[cyan]1.[/cyan] Single Field")
+                        console.print("[cyan]2.[/cyan] Multiple Fields")
+                        mode = typer.prompt("Enter 1 or 2", type=int)
+                        updated_fields = {}
+                        if mode == 1:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idx = typer.prompt("Select field number to edit", type=int)
+                            if 1 <= field_idx <= len(fields):
+                                field = fields[field_idx-1]
+                                new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
+                                if new_val != record[field]:
+                                    updated_fields[field] = new_val
+                            else:
+                                console.print("[red]Invalid field selection.[/red]")
+                        elif mode == 2:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3,5)")
+                            try:
+                                selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
+                                for field_idx in selected:
+                                    if 1 <= field_idx <= len(fields):
+                                        field = fields[field_idx-1]
+                                        new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
+                                        if new_val != record[field]:
+                                            updated_fields[field] = new_val
+                                    else:
+                                        console.print(f"[red]Invalid field number: {field_idx}[/red]")
+                            except Exception:
+                                console.print("[red]Invalid input format.[/red]")
+                        else:
+                            console.print("[red]Invalid selection.[/red]")
+                        if updated_fields:
+                            success = update_result(record['id'], updated_fields)
+                            if success:
+                                console.print("[green]Record updated successfully![/green]")
+                            else:
+                                console.print("[red]Failed to update record.[/red]")
+                        else:
+                            console.print("[yellow]No changes made.[/yellow]")
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                elif crud_choice == 3:
+                    results = fetch_all_results()
+                    if not results:
+                        console.print("[red]No records to delete.[/red]")
+                        continue
+                    for idx, row in enumerate(results, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row['country']})")
+                    idx = typer.prompt("Enter number to delete", type=int)
+                    if 1 <= idx <= len(results):
+                        record = results[idx-1]
+                        confirm = typer.confirm(f"Are you sure you want to delete {record['company_name']} ({record['hs_code']}, {record['keyword']}, {record['country']})?", default=False)
+                        if confirm:
+                            success = delete_result(record['id'])
+                            if success:
+                                console.print("[green]Record deleted successfully![/green]")
+                            else:
+                                console.print("[red]Failed to delete record.[/red]")
+                        else:
+                            console.print("[yellow]Delete cancelled.[/yellow]")
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                elif crud_choice == 4:
+                    break
+                else:
+                    console.print("[red]Invalid option. Please try again.[/red]")
         elif choice == 5:
             # Export Results (Excel)
             results = fetch_all_results()
