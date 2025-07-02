@@ -102,4 +102,19 @@ def parse_deepseek_output(output: str) -> List[Dict]:
         if company.get('company_name'):
             companies.append(company)
     print("DEBUG: Parsed company names:", [c['company_name'] for c in companies])
-    return companies 
+    return companies
+
+def fetch_all_results():
+    """
+    Fetch all past results from the database, ordered by most recent (id DESC).
+    Returns a list of dicts with all columns.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, hs_code, keyword, country, company_name, company_country, company_website_link, description, source FROM results ORDER BY id DESC')
+    rows = c.fetchall()
+    conn.close()
+    columns = [
+        'id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source'
+    ]
+    return [dict(zip(columns, row)) for row in rows] 

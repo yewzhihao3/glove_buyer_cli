@@ -6,7 +6,9 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek
-from db import init_db, insert_results, parse_deepseek_output
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results
+import pandas as pd
+import datetime
 
 app = typer.Typer()
 console = Console()
@@ -15,7 +17,7 @@ MENU_OPTIONS = [
     "Select HS Code to Search",
     "Search Buyers with DeepSeek",
     "Manage HS Codes (CRUD)",
-    "View Past Results",
+    "View Buyer Search History",
     "Export Results (CSV)",
     "Exit"
 ]
@@ -198,9 +200,44 @@ def run():
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")
         elif choice == 4:
-            console.print("[yellow]Feature coming soon: View Past Results[/yellow]")
+            results = fetch_all_results()
+            if not results:
+                console.print("[red]No past buyer search results found.[/red]")
+            else:
+                table = Table(title="Buyer Search History", show_lines=True)
+                table.add_column("No.", style="cyan", justify="right")
+                table.add_column("HS Code", style="magenta")
+                table.add_column("Keyword", style="yellow")
+                table.add_column("Country", style="green")
+                table.add_column("Company Name", style="bold")
+                table.add_column("Company Country", style="blue")
+                table.add_column("Website", style="underline")
+                table.add_column("Description", style="dim", overflow="fold")
+                for idx, row in enumerate(results, 1):
+                    table.add_row(
+                        str(idx),
+                        row['hs_code'],
+                        row['keyword'],
+                        row['country'],
+                        row['company_name'],
+                        row['company_country'],
+                        row['company_website_link'],
+                        (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                    )
+                console.print(table)
         elif choice == 5:
-            console.print("[yellow]Feature coming soon: Export Results (CSV)[/yellow]")
+            # Export Results (Excel)
+            results = fetch_all_results()
+            if not results:
+                console.print("[red]No results to export.[/red]")
+            else:
+                export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
+                os.makedirs(export_dir, exist_ok=True)
+                timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+                export_path = os.path.join(export_dir, f'buyer_search_results_{timestamp}.xlsx')
+                df = pd.DataFrame(results)
+                df.to_excel(export_path, index=False)
+                console.print(f"[green]Results exported to:[/green] [bold]{export_path}[/bold]")
         elif choice == 6:
             console.print("[green]Goodbye!")
             break

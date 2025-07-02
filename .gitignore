@@ -2,3 +2,7 @@ config/.env
 data/results.db
 __pycache__/
 *.pyc
+
+# Ignore Excel export files and EXPORT directory
+EXPORT/
+*.xlsx
