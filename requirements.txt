@@ -2,3 +2,5 @@ typer
 rich 
 python-dotenv
 requests
+pandas
+openpyxl
