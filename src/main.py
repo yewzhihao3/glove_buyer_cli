@@ -10,6 +10,7 @@ from db import init_db, insert_results, parse_deepseek_output, fetch_all_results
 import pandas as pd
 import datetime
 import csv
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 app = typer.Typer()
 console = Console()
@@ -131,7 +132,10 @@ def run():
                     continue
                 console.print(f"[yellow]Searching buyers for HS Code {hs_code} ({desc}) in {country} with keyword '{keyword}'...[/yellow]")
                 try:
-                    result = query_deepseek(hs_code, keyword, country)
+                    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                        task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                        progress.start_task(task)
+                        result = query_deepseek(hs_code, keyword, country)
                     console.print("[bold green]DeepSeek Results:[/bold green]")
                     console.print(result)
                     # Save to DB

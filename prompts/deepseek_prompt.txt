@@ -1,15 +1,17 @@
-You are a trade researcher. Given the following HS Code, product keyword, and country/region, search for real-world companies that import or buy these products.
+You are a trade researcher. Given the following HS Code, product keyword, and country/region, search for as many real-world companies as possible that import or buy these products.
 
 HS Code: {hs_code}
 Product: {keyword}
 Country/Region: {country}
 
-Return a numbered list of at least 10 (but no more than 20) real, verifiable, and currently active companies. For each, provide:
+Return a numbered list of all real, verifiable, and currently active companies you can find (minimum 20, ideally more). If the list is long, return results in multiple parts (Part 1, Part 2, etc.), or chunked by region. Do not stop at 10.
+
+For each, provide:
 - Company Name
 - Country
-- Website or Contact Email (if publicly available)
-- Brief Description (if any)
+- Website
+- Brief Description
 
-If fewer than 10 are found, return as many as possible. Only return real information. If none is found, respond: "No verified buyers found."
+Only include importers, buyers, and distributors (not manufacturers). Only return real information. If none is found, respond: "No verified buyers found."
 
 Prioritize companies with recent activity in the last 3 years. Focus on importers, distributors, or buyers, not manufacturers. 
