@@ -8,6 +8,8 @@ def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    
+    # Create results table
     c.execute('''
         CREATE TABLE IF NOT EXISTS results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,6 +24,20 @@ def init_db():
             UNIQUE(hs_code, keyword, country, company_name)
         )
     ''')
+    
+    # Create country_hs_codes table for country-specific HS codes
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS country_hs_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            country TEXT NOT NULL,
+            hs_code TEXT NOT NULL,
+            description TEXT NOT NULL,
+            source TEXT DEFAULT 'DeepSeek',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(country, hs_code)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -149,4 +165,83 @@ def delete_result(record_id: int) -> bool:
     conn.commit()
     deleted = c.rowcount > 0
     conn.close()
-    return deleted 
+    return deleted
+
+def get_country_hs_codes(country: str) -> List[Dict]:
+    """
+    Get HS codes for a specific country from the database.
+    Returns a list of dicts with 'hs_code' and 'description' keys.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT hs_code, description FROM country_hs_codes WHERE country = ? ORDER BY created_at DESC', (country,))
+    rows = c.fetchall()
+    conn.close()
+    return [{'hs_code': row[0], 'description': row[1]} for row in rows]
+
+def save_country_hs_code(country: str, hs_code: str, description: str, source: str = 'DeepSeek') -> bool:
+    """
+    Save a country-specific HS code to the database.
+    Returns True if successful, False if duplicate.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute('''
+            INSERT INTO country_hs_codes (country, hs_code, description, source)
+            VALUES (?, ?, ?, ?)
+        ''', (country, hs_code, description, source))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        # Duplicate entry
+        success = False
+    conn.close()
+    return success
+
+def update_country_hs_code(country: str, old_hs_code: str, new_hs_code: str, new_description: str) -> bool:
+    """
+    Update an existing country-specific HS code.
+    Returns True if successful, False if not found.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE country_hs_codes 
+        SET hs_code = ?, description = ?
+        WHERE country = ? AND hs_code = ?
+    ''', (new_hs_code, new_description, country, old_hs_code))
+    conn.commit()
+    updated = c.rowcount > 0
+    conn.close()
+    return updated
+
+def delete_country_hs_code(country: str, hs_code: str) -> bool:
+    """
+    Delete a country-specific HS code.
+    Returns True if successful, False if not found.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM country_hs_codes WHERE country = ? AND hs_code = ?', (country, hs_code))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    return deleted
+
+def get_all_country_hs_codes() -> List[Dict]:
+    """
+    Get all country-specific HS codes from the database.
+    Returns a list of dicts with all columns.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, country, hs_code, description, source, created_at 
+        FROM country_hs_codes 
+        ORDER BY country, created_at DESC
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'country', 'hs_code', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows] 
