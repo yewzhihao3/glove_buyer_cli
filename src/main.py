@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary
 import pandas as pd
 import datetime
 import csv
@@ -19,7 +19,7 @@ MENU_OPTIONS = [
     "Search Buyers with DeepSeek",
     "Manage HS Codes (CRUD)",
     "Manage Country-Specific HS Codes",
-    "Manage Buyer Search History",
+    "Manage Potential Buyer List",
     "Export Results (CSV)",
     "Exit"
 ]
@@ -56,12 +56,13 @@ def country_hs_code_crud_menu():
 
 def buyer_history_crud_menu():
     crud_options = [
-        "View All Buyer Search History",
-        "Edit Buyer Search Record",
-        "Delete Buyer Search Record",
+        "View All Potential Buyers",
+        "Edit Buyer Record",
+        "Delete Buyer Record",
+        "Check for Duplicates",
         "Back to Main Menu"
     ]
-    console.rule("[bold magenta]Buyer Search History Management[/bold magenta]")
+    console.rule("[bold magenta]Potential Buyer List Management[/bold magenta]")
     for idx, option in enumerate(crud_options, 1):
         console.print(f"[cyan]{idx}.[/cyan] {option}")
     choice = typer.prompt("\nSelect an option", type=int)
@@ -254,22 +255,64 @@ def run():
                                 console.print("[red]Invalid keyword selection.[/red]")
                                 continue
                             
-                            # Perform buyer search
-                            console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                            try:
-                                with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                                    task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                                    progress.start_task(task)
-                                    result = query_deepseek(selected_code, keyword, country)
-                                console.print("[bold green]DeepSeek Results:[/bold green]")
-                                console.print(result)
-                                # Save to DB
-                                companies = parse_deepseek_output(result)
-                                console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                                insert_results(selected_code, keyword, country, companies)
-                                console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                            except Exception as e:
-                                console.print(f"[red]Error: {e}[/red]")
+                            # Check for existing buyer results first
+                            existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
+                            
+                            if existing_buyers:
+                                console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
+                                for idx, buyer in enumerate(existing_buyers, 1):
+                                    console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
+                                
+                                console.print("\n[bold]Options:[/bold]")
+                                console.print("[cyan]1.[/cyan] Use existing results")
+                                console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
+                                console.print("[cyan]3.[/cyan] Back to keyword selection")
+                                
+                                buyer_option = typer.prompt("Select option", type=int)
+                                
+                                if buyer_option == 1:
+                                    # Use existing results
+                                    console.print("[green]Using existing buyer results.[/green]")
+                                elif buyer_option == 2:
+                                    # Query DeepSeek for new results (excluding existing companies)
+                                    existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
+                                    console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+                                    try:
+                                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                                            task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                                            progress.start_task(task)
+                                            result = query_deepseek(selected_code, keyword, country, existing_company_names)
+                                        console.print("[bold green]DeepSeek Results:[/bold green]")
+                                        console.print(result)
+                                        # Save to DB
+                                        companies = parse_deepseek_output(result)
+                                        console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                                        insert_results(selected_code, keyword, country, companies)
+                                        console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+                                    except Exception as e:
+                                        console.print(f"[red]Error: {e}[/red]")
+                                elif buyer_option == 3:
+                                    continue
+                                else:
+                                    console.print("[red]Invalid option.[/red]")
+                                continue
+                            else:
+                                # No existing results, query DeepSeek
+                                console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+                                try:
+                                    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                                        task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                                        progress.start_task(task)
+                                        result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
+                                    console.print("[bold green]DeepSeek Results:[/bold green]")
+                                    console.print(result)
+                                    # Save to DB
+                                    companies = parse_deepseek_output(result)
+                                    console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                                    insert_results(selected_code, keyword, country, companies)
+                                    console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+                                except Exception as e:
+                                    console.print(f"[red]Error: {e}[/red]")
                             
                             # Ask if user wants to continue
                             console.print("[bold]Do you want to continue with another buyer search?[/bold]")
@@ -285,7 +328,7 @@ def run():
                             continue
                     else:
                         console.print("[red]Invalid option.[/red]")
-                        continue
+                    continue
                 
                 # Step 4: Ask if user wants to continue to buyer search
                 if existing_codes:
@@ -339,22 +382,64 @@ def run():
                     console.print("[red]Invalid keyword selection.[/red]")
                     continue
                 
-                # Step 7: Perform buyer search
-                console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                try:
-                    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                        task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                        progress.start_task(task)
-                        result = query_deepseek(selected_code, keyword, country)
-                    console.print("[bold green]DeepSeek Results:[/bold green]")
-                    console.print(result)
-                    # Save to DB
-                    companies = parse_deepseek_output(result)
-                    console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                    insert_results(selected_code, keyword, country, companies)
-                    console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                except Exception as e:
-                    console.print(f"[red]Error: {e}[/red]")
+                # Step 7: Check for existing buyer results first
+                existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
+                
+                if existing_buyers:
+                    console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
+                    for idx, buyer in enumerate(existing_buyers, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
+                    
+                    console.print("\n[bold]Options:[/bold]")
+                    console.print("[cyan]1.[/cyan] Use existing results")
+                    console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
+                    console.print("[cyan]3.[/cyan] Back to keyword selection")
+                    
+                    buyer_option = typer.prompt("Select option", type=int)
+                    
+                    if buyer_option == 1:
+                        # Use existing results
+                        console.print("[green]Using existing buyer results.[/green]")
+                    elif buyer_option == 2:
+                        # Query DeepSeek for new results (excluding existing companies)
+                        existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
+                        console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+                        try:
+                            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                                task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                                progress.start_task(task)
+                                result = query_deepseek(selected_code, keyword, country, existing_company_names)
+                            console.print("[bold green]DeepSeek Results:[/bold green]")
+                            console.print(result)
+                            # Save to DB
+                            companies = parse_deepseek_output(result)
+                            console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                            insert_results(selected_code, keyword, country, companies)
+                            console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+                        except Exception as e:
+                            console.print(f"[red]Error: {e}[/red]")
+                    elif buyer_option == 3:
+                        continue
+                    else:
+                        console.print("[red]Invalid option.[/red]")
+                    continue
+                else:
+                    # No existing results, query DeepSeek
+                    console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+                    try:
+                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                            task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                            progress.start_task(task)
+                            result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
+                        console.print("[bold green]DeepSeek Results:[/bold green]")
+                        console.print(result)
+                        # Save to DB
+                        companies = parse_deepseek_output(result)
+                        console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                        insert_results(selected_code, keyword, country, companies)
+                        console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
                 
                 # Step 8: Ask if user wants to continue
                 console.print("[bold]Do you want to continue with another buyer search?[/bold]")
@@ -414,78 +499,6 @@ def run():
                                 console.print("[red]Failed to delete HS Code.[/red]")
                         else:
                             console.print("[yellow]Delete cancelled.[/yellow]")
-                    else:
-                        console.print("[red]Invalid selection.[/red]")
-                elif crud_choice == 4:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes found.[/red]")
-                    else:
-                        table = Table(title="HS Codes List")
-                        table.add_column("No.", style="cyan", justify="right")
-                        table.add_column("HS Code", style="magenta")
-                        table.add_column("Description", style="green")
-                        for idx, (code, desc) in enumerate(codes, 1):
-                            table.add_row(str(idx), code, desc)
-                        console.print(table)
-                    # Future enhancement: Add search/filter functionality here
-                elif crud_choice == 5:
-                    break
-                else:
-                    console.print("[red]Invalid option. Please try again.[/red]")
-        elif choice == 3:
-            while True:
-                crud_choice = hs_code_crud_menu()
-                if crud_choice == 1:
-                    code = typer.prompt("Enter new HS Code")
-                    desc = typer.prompt("Enter description")
-                    success = add_hs_code(code, desc)
-                    if success:
-                        console.print(f"[green]HS Code {code} - {desc} added successfully![/green]")
-                    else:
-                        console.print(f"[red]HS Code {code} - {desc} already exists or could not be added.[/red]")
-                elif crud_choice == 2:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes to edit.[/red]")
-                        continue
-                    console.print("[bold]Select HS code to edit:[/bold]")
-                    for idx, (code, desc) in enumerate(codes, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
-                    idx = typer.prompt("Enter number to edit", type=int)
-                    if 1 <= idx <= len(codes):
-                        old_code, old_desc = codes[idx-1]
-                        new_code = typer.prompt("Enter new HS Code", default=old_code)
-                        new_desc = typer.prompt("Enter new description", default=old_desc)
-                        success = edit_hs_code(idx, new_code, new_desc)
-                        if success:
-                            console.print(f"[green]HS Code updated to: {new_code} - {new_desc}[/green]")
-                        else:
-                            console.print("[red]Failed to update HS Code.[/red]")
-                    else:
-                        console.print("[red]Invalid selection.[/red]")
-                elif crud_choice == 3:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes to delete.[/red]")
-                        continue
-                    console.print("[bold]Select HS code to delete:[/bold]")
-                    for idx, (code, desc) in enumerate(codes, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
-                    idx = typer.prompt("Enter number to delete", type=int)
-                    if 1 <= idx <= len(codes):
-                        code, desc = codes[idx-1]
-                        confirm = typer.confirm(f"Are you sure you want to delete {code} - {desc}?", default=False)
-                        if confirm:
-                            success = delete_hs_code(idx)
-                            if success:
-                                console.print(f"[green]HS Code {code} - {desc} deleted.[/green]")
-                            else:
-                                console.print("[red]Failed to delete HS Code.[/red]")
-                        else:
-                            console.print("[yellow]Delete cancelled.[/yellow]")
-                    else:
-                        console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 4:
                     codes = load_hs_codes_xlsx()
                     if not codes:
@@ -796,6 +809,53 @@ def run():
                     else:
                         console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 4:
+                    # Check for duplicates
+                    duplicates = get_duplicate_summary()
+                    if not duplicates:
+                        console.print("[green]No duplicate companies found in the database.[/green]")
+                    else:
+                        console.print(f"[yellow]Found {len(duplicates)} groups of duplicate companies:[/yellow]")
+                        table = Table(title="Duplicate Companies Summary", show_lines=True)
+                        table.add_column("No.", style="cyan", justify="right")
+                        table.add_column("Company Name", style="bold")
+                        table.add_column("Company Country", style="blue")
+                        table.add_column("Duplicate Count", style="red")
+                        for idx, duplicate in enumerate(duplicates, 1):
+                            table.add_row(
+                                str(idx),
+                                duplicate['company_name'],
+                                duplicate['company_country'],
+                                str(duplicate['duplicate_count'])
+                            )
+                        console.print(table)
+                        
+                        total_duplicates = sum(dup['duplicate_count'] for dup in duplicates)
+                        total_to_remove = total_duplicates - len(duplicates)  # Keep one from each group
+                        console.print(f"[yellow]Total duplicate records: {total_duplicates}[/yellow]")
+                        console.print(f"[yellow]Records to be removed: {total_to_remove}[/yellow]")
+                        
+                        # Ask user if they want to remove duplicates
+                        console.print("\n[bold]Do you want to remove these duplicates?[/bold]")
+                        console.print("[cyan]1.[/cyan] Yes, remove all duplicates (keep oldest record from each group)")
+                        console.print("[cyan]2.[/cyan] No, keep all records")
+                        
+                        remove_choice = typer.prompt("Select option", type=int)
+                        
+                        if remove_choice == 1:
+                            confirm = typer.confirm("Are you sure you want to remove all duplicates? (This will keep the oldest record from each duplicate group)", default=False)
+                            if confirm:
+                                result = find_and_remove_duplicates()
+                                console.print(f"[green]Duplicate removal completed![/green]")
+                                console.print(f"[green]Duplicate groups found: {result['duplicate_groups']}[/green]")
+                                console.print(f"[green]Total duplicates found: {result['duplicates_found']}[/green]")
+                                console.print(f"[green]Duplicates removed: {result['duplicates_removed']}[/green]")
+                            else:
+                                console.print("[yellow]Duplicate removal cancelled.[/yellow]")
+                        elif remove_choice == 2:
+                            console.print("[yellow]Duplicate removal skipped. All records kept.[/yellow]")
+                        else:
+                            console.print("[red]Invalid option.[/red]")
+                elif crud_choice == 5:
                     break
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")

@@ -245,3 +245,104 @@ def get_all_country_hs_codes() -> List[Dict]:
     conn.close()
     columns = ['id', 'country', 'hs_code', 'description', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows] 
+
+def check_existing_buyer_results(hs_code: str, keyword: str, country: str) -> List[Dict]:
+    """
+    Check if we already have buyer results for the given HS code, keyword, and country combination.
+    Returns a list of existing company results if found, empty list if none.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT company_name, company_country, company_website_link, description, source 
+        FROM results 
+        WHERE hs_code = ? AND keyword = ? AND country = ?
+        ORDER BY id DESC
+    ''', (hs_code, keyword, country))
+    rows = c.fetchall()
+    conn.close()
+    columns = ['company_name', 'company_country', 'company_website_link', 'description', 'source']
+    return [dict(zip(columns, row)) for row in rows]
+
+def find_and_remove_duplicates() -> Dict:
+    """
+    Find and remove duplicate companies based on company_name and company_country.
+    Returns a dict with counts of duplicates found and removed.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Find duplicates based on company_name and company_country
+    c.execute('''
+        SELECT company_name, company_country, COUNT(*) as count
+        FROM results 
+        GROUP BY company_name, company_country 
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC
+    ''')
+    duplicates = c.fetchall()
+    
+    total_duplicates_found = 0
+    total_duplicates_removed = 0
+    
+    for company_name, company_country, count in duplicates:
+        total_duplicates_found += count
+        
+        # Get all records for this company (ordered by id to keep the oldest)
+        c.execute('''
+            SELECT id, company_name, company_country, company_website_link, description, source
+            FROM results 
+            WHERE company_name = ? AND company_country = ?
+            ORDER BY id ASC
+        ''', (company_name, company_country))
+        
+        records = c.fetchall()
+        
+        # Keep the first record (oldest), delete the rest
+        if len(records) > 1:
+            # Delete all but the first record
+            ids_to_delete = [str(record[0]) for record in records[1:]]
+            placeholders = ','.join(['?' for _ in ids_to_delete])
+            
+            c.execute(f'''
+                DELETE FROM results 
+                WHERE id IN ({placeholders})
+            ''', ids_to_delete)
+            
+            total_duplicates_removed += len(records) - 1
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        'duplicates_found': total_duplicates_found,
+        'duplicates_removed': total_duplicates_removed,
+        'duplicate_groups': len(duplicates)
+    }
+
+def get_duplicate_summary() -> List[Dict]:
+    """
+    Get a summary of duplicate companies without removing them.
+    Returns a list of dicts with duplicate information.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute('''
+        SELECT company_name, company_country, COUNT(*) as count
+        FROM results 
+        GROUP BY company_name, company_country 
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC
+    ''')
+    duplicates = c.fetchall()
+    conn.close()
+    
+    return [
+        {
+            'company_name': row[0],
+            'company_country': row[1],
+            'duplicate_count': row[2]
+        }
+        for row in duplicates
+    ]

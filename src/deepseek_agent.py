@@ -18,14 +18,23 @@ def get_next_part_prompt(original_prompt: str, part_number: int) -> str:
     """Generate a follow-up prompt to request the next part of the answer."""
     return f"{original_prompt}\n\nPlease continue with Part {part_number}. Only return the next part of the list, do not repeat previous results."
 
-def query_deepseek(hs_code: str, keyword: str, country: str) -> str:
+def query_deepseek(hs_code: str, keyword: str, country: str, existing_companies: List[str] = None) -> str:
     load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'config', '.env'))
     api_key = os.getenv('DEEPSEEK_API_KEY')
     api_url = os.getenv('DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/chat/completions')
     if not api_key:
         raise ValueError('DEEPSEEK_API_KEY not found in environment.')
     prompt_template = load_prompt_template()
-    prompt = prompt_template.format(hs_code=hs_code, keyword=keyword, country=country)
+    
+    # Add existing companies to the prompt if provided
+    if existing_companies:
+        existing_companies_text = "\n\nIMPORTANT: Please EXCLUDE the following companies that we already have in our database:\n"
+        for company in existing_companies:
+            existing_companies_text += f"- {company}\n"
+        existing_companies_text += "\nPlease provide DIFFERENT companies that are not in this list."
+        prompt = prompt_template.format(hs_code=hs_code, keyword=keyword, country=country) + existing_companies_text
+    else:
+        prompt = prompt_template.format(hs_code=hs_code, keyword=keyword, country=country)
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json',
