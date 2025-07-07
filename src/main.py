@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, init_international_hs_codes, get_all_international_hs_codes, get_all_asia_hs_codes, save_asia_hs_code, check_existing_buyer_leads, insert_buyer_leads
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_all_asia_hs_codes, save_asia_hs_code, update_asia_hs_code, delete_asia_hs_code, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, init_international_hs_codes, get_all_international_hs_codes, check_existing_buyer_leads, insert_buyer_leads
 import pandas as pd
 import datetime
 import csv
@@ -248,6 +248,17 @@ def run():
                     else:
                         console.print("[red]Invalid country selection.[/red]")
                         continue
+                    # Check for existing HS codes for the selected country
+                    if scope_name == "Asia":
+                        existing_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
+                    else:
+                        existing_codes = [c for c in get_all_global_hs_codes() if c['country'].lower() == country.lower()]
+                    if existing_codes:
+                        console.print(f"[green]Existing HS codes for {country}:[/green]")
+                        for idx, code_info in enumerate(existing_codes, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                    else:
+                        console.print(f"[yellow]No HS codes found for {country}.[/yellow]")
                     # 3. HS code and buyer search loop for this country
                     while True:
                         if scope_name == "Asia":
@@ -389,15 +400,15 @@ def run():
                         continue
                     if scope_choice == 1:
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
-                        scope_name = "Asia"
+                        current_scope = "Asia"
                     elif scope_choice == 2:
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
-                        scope_name = "Global"
+                        current_scope = "Global"
                     else:
                         console.print("[red]Invalid scope selection.[/red]")
                         continue
                     # Country selection
-                    console.print(f"[bold]Select a country from {scope_name} or choose Global:[/bold]")
+                    console.print(f"[bold]Select a country from {current_scope} or choose Global:[/bold]")
                     for idx, country in enumerate(country_list, 1):
                         console.print(f"[cyan]{idx}.[/cyan] {country}")
                     console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Global (for global HS codes)[/italic]")
@@ -412,6 +423,28 @@ def run():
                     else:
                         console.print("[red]Invalid country selection.[/red]")
                         continue
+                    # Check for existing HS codes for the selected country
+                    if scope_choice == 1:
+                        existing_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
+                    elif scope_choice == 2:
+                        existing_codes = [c for c in get_all_global_hs_codes() if c['country'].lower() == country.lower()]
+                    else:
+                        existing_codes = []
+                    if existing_codes:
+                        console.print(f"[green]Existing HS codes for {country}:[/green]")
+                        for idx, code_info in enumerate(existing_codes, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                        console.print(f"\n[bold yellow]HS codes already exist for {country}. What would you like to do?[/bold yellow]")
+                        console.print("[cyan]1.[/cyan] Add another HS code")
+                        console.print("[cyan]2.[/cyan] Return to HS Code Management menu")
+                        reuse_choice = typer.prompt("Select option", type=int)
+                        if reuse_choice == 2:
+                            continue
+                        elif reuse_choice != 1:
+                            console.print("[red]Invalid option. Returning to menu.[/red]")
+                            continue
+                    else:
+                        console.print(f"[yellow]No HS codes found for {country}.[/yellow]")
                     # Ask for DeepSeek or manual
                     console.print("[bold]How would you like to add HS codes for this selection?[/bold]")
                     console.print("[cyan]1.[/cyan] Query DeepSeek for HS codes")
@@ -493,7 +526,7 @@ def run():
                                     if save_option == 1:
                                         added_count = 0
                                         for code_info in new_codes:
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                            if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                         console.print(f"[green]Added {added_count} new HS codes for {country} to database.[/green]")
                                     elif save_option == 2:
@@ -507,7 +540,7 @@ def run():
                                             for idx in selected_indices:
                                                 if 0 <= idx < len(new_codes):
                                                     code_info = new_codes[idx]
-                                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                                    if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                         added_count += 1
                                             console.print(f"[green]Added {added_count} selected HS codes for {country} to database.[/green]")
                                         except Exception:
@@ -552,8 +585,10 @@ def run():
                     if region_choice == 3:
                         continue
                     if region_choice == 1:
+                        current_scope = "Asia"
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
                     elif region_choice == 2:
+                        current_scope = "Global"
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
                     else:
                         console.print("[red]Invalid region selection.[/red]")
@@ -570,7 +605,7 @@ def run():
                     else:
                         console.print("[red]Invalid country selection.[/red]")
                         continue
-                    codes = get_country_hs_codes(country)
+                    codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                     if not codes:
                         console.print(f"[red]No HS codes to edit for {country}.[/red]")
                         continue
@@ -581,8 +616,8 @@ def run():
                     if 1 <= idx <= len(codes):
                         old_code_info = codes[idx-1]
                         # Field selection
-                        fields = ['hs_code', 'description', 'source']
-                        field_names = ['HS Code', 'Description', 'Source']
+                        fields = ['hs_code', 'description']
+                        field_names = ['HS Code', 'Description']
                         console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
                         console.print("[cyan]1.[/cyan] Single Field")
                         console.print("[cyan]2.[/cyan] Multiple Fields")
@@ -602,7 +637,7 @@ def run():
                         elif mode == 2:
                             for i, name in enumerate(field_names, 1):
                                 console.print(f"[cyan]{i}.[/cyan] {name}")
-                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3)")
+                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,2)")
                             try:
                                 selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
                                 for field_idx in selected:
@@ -619,18 +654,20 @@ def run():
                             console.print("[red]Invalid selection.[/red]")
                         # Save changes
                         if updated_fields:
-                            # Always require hs_code and description for update_country_hs_code
+                            # Always require hs_code and description for update_asia_hs_code
                             new_hs_code = updated_fields.get('hs_code', old_code_info['hs_code'])
                             new_description = updated_fields.get('description', old_code_info['description'])
                             # If source is updated, update it separately
-                            update_success = update_country_hs_code(country, old_code_info['hs_code'], new_hs_code, new_description)
-                            if update_success and 'source' in updated_fields:
-                                # Direct DB update for source
+                            update_success = update_asia_hs_code(old_code_info['id'], new_hs_code, new_description)
+                            if update_success:
                                 from db import DB_PATH
                                 import sqlite3
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
-                                c.execute('UPDATE country_hs_codes SET source = ? WHERE country = ? AND hs_code = ?', (updated_fields['source'], country, new_hs_code))
+                                if current_scope == "Asia":
+                                    c.execute('UPDATE asia_hs_codes SET source = ? WHERE id = ?', ("custom", old_code_info['id']))
+                                elif current_scope == "Global":
+                                    c.execute('UPDATE global_hs_codes SET source = ? WHERE id = ?', ("custom", old_code_info['id']))
                                 conn.commit()
                                 conn.close()
                             if update_success:
@@ -652,8 +689,10 @@ def run():
                     if region_choice == 3:
                         continue
                     if region_choice == 1:
+                        current_scope = "Asia"
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
                     elif region_choice == 2:
+                        current_scope = "Global"
                         country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
                     else:
                         console.print("[red]Invalid region selection.[/red]")
@@ -670,7 +709,7 @@ def run():
                     else:
                         console.print("[red]Invalid country selection.[/red]")
                         continue
-                    codes = get_country_hs_codes(country)
+                    codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                     if not codes:
                         console.print(f"[red]No HS codes to delete for {country}.[/red]")
                         continue
@@ -680,22 +719,25 @@ def run():
                     selection = typer.prompt("Enter number(s) to delete (comma-separated)")
                     try:
                         selected_indices = [int(x.strip())-1 for x in selection.split(',') if x.strip().isdigit()]
-                        to_delete = [codes[idx] for idx in selected_indices if 0 <= idx < len(codes)]
-                        if not to_delete:
-                            console.print("[red]No valid codes selected for deletion.[/red]")
-                            continue
-                        confirm = typer.confirm(f"Are you sure you want to delete {len(to_delete)} HS code(s) for {country}?", default=False)
-                        if confirm:
-                            deleted_count = 0
-                            for code_info in to_delete:
-                                success = delete_country_hs_code(country, code_info['hs_code'])
-                                if success:
-                                    deleted_count += 1
-                            console.print(f"[green]{deleted_count} HS code(s) deleted for {country}.[/green]")
-                        else:
-                            console.print("[yellow]Delete cancelled.[/yellow]")
                     except Exception:
-                        console.print("[red]Invalid input format.[/red]")
+                        console.print("[red]Invalid input: please enter number(s) separated by commas (e.g. 1,2,3).[/red]")
+                        continue
+
+                    to_delete = [codes[idx] for idx in selected_indices if 0 <= idx < len(codes)]
+                    if not to_delete:
+                        console.print("[red]No valid codes selected for deletion.[/red]")
+                        continue
+
+                    confirm = typer.confirm(f"Are you sure you want to delete {len(to_delete)} HS code(s) for {country}?", default=False)
+                    if confirm:
+                        deleted_count = 0
+                        for code_info in to_delete:
+                            success = delete_asia_hs_code(code_info['id'])
+                            if success:
+                                deleted_count += 1
+                        console.print(f"[green]{deleted_count} HS code(s) deleted for {country}.[/green]")
+                    else:
+                        console.print("[yellow]Delete cancelled.[/yellow]")
                 elif crud_choice == 4:
                     # View All HS Codes (global and country-specific)
                     global_codes = get_all_global_hs_codes()
@@ -767,7 +809,7 @@ def run():
                 elif crud_choice == 2:
                     # View HS Codes for Specific Country
                     country = typer.prompt("Enter country name")
-                    country_codes = get_country_hs_codes(country)
+                    country_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                     if not country_codes:
                         console.print(f"[red]No HS codes found for {country}.[/red]")
                     else:
@@ -780,7 +822,7 @@ def run():
                     hs_code = typer.prompt("Enter HS code")
                     description = typer.prompt("Enter description")
                     source = typer.prompt("Enter source (optional)", default="Manual")
-                    success = save_country_hs_code(country, hs_code, description, source)
+                    success = save_asia_hs_code(hs_code, description, country)
                     if success:
                         console.print(f"[green]HS code {hs_code} for {country} added successfully![/green]")
                     else:
@@ -788,7 +830,7 @@ def run():
                 elif crud_choice == 4:
                     # Edit Country-Specific HS Code
                     country = typer.prompt("Enter country name")
-                    country_codes = get_country_hs_codes(country)
+                    country_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                     if not country_codes:
                         console.print(f"[red]No HS codes found for {country}.[/red]")
                         continue
@@ -799,8 +841,8 @@ def run():
                     if 1 <= idx <= len(country_codes):
                         old_code_info = country_codes[idx-1]
                         # Field selection
-                        fields = ['hs_code', 'description', 'source']
-                        field_names = ['HS Code', 'Description', 'Source']
+                        fields = ['hs_code', 'description']
+                        field_names = ['HS Code', 'Description']
                         console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
                         console.print("[cyan]1.[/cyan] Single Field")
                         console.print("[cyan]2.[/cyan] Multiple Fields")
@@ -820,7 +862,7 @@ def run():
                         elif mode == 2:
                             for i, name in enumerate(field_names, 1):
                                 console.print(f"[cyan]{i}.[/cyan] {name}")
-                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3)")
+                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,2)")
                             try:
                                 selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
                                 for field_idx in selected:
@@ -837,18 +879,20 @@ def run():
                             console.print("[red]Invalid selection.[/red]")
                         # Save changes
                         if updated_fields:
-                            # Always require hs_code and description for update_country_hs_code
+                            # Always require hs_code and description for update_asia_hs_code
                             new_hs_code = updated_fields.get('hs_code', old_code_info['hs_code'])
                             new_description = updated_fields.get('description', old_code_info['description'])
                             # If source is updated, update it separately
-                            update_success = update_country_hs_code(country, old_code_info['hs_code'], new_hs_code, new_description)
-                            if update_success and 'source' in updated_fields:
-                                # Direct DB update for source
+                            update_success = update_asia_hs_code(old_code_info['id'], new_hs_code, new_description)
+                            if update_success:
                                 from db import DB_PATH
                                 import sqlite3
                                 conn = sqlite3.connect(DB_PATH)
                                 c = conn.cursor()
-                                c.execute('UPDATE country_hs_codes SET source = ? WHERE country = ? AND hs_code = ?', (updated_fields['source'], country, new_hs_code))
+                                if current_scope == "Asia":
+                                    c.execute('UPDATE asia_hs_codes SET source = ? WHERE id = ?', ("custom", old_code_info['id']))
+                                elif current_scope == "Global":
+                                    c.execute('UPDATE global_hs_codes SET source = ? WHERE id = ?', ("custom", old_code_info['id']))
                                 conn.commit()
                                 conn.close()
                             if update_success:
@@ -862,7 +906,7 @@ def run():
                 elif crud_choice == 5:
                     # Delete Country-Specific HS Code
                     country = typer.prompt("Enter country name")
-                    country_codes = get_country_hs_codes(country)
+                    country_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                     if not country_codes:
                         console.print(f"[red]No HS codes found for {country}.[/red]")
                         continue
@@ -874,7 +918,7 @@ def run():
                         code_info = country_codes[idx-1]
                         confirm = typer.confirm(f"Are you sure you want to delete {code_info['hs_code']} - {code_info['description']} for {country}?", default=False)
                         if confirm:
-                            success = delete_country_hs_code(country, code_info['hs_code'])
+                            success = delete_asia_hs_code(code_info['id'])
                             if success:
                                 console.print(f"[green]HS code {code_info['hs_code']} for {country} deleted.[/green]")
                             else:
@@ -916,7 +960,7 @@ def run():
                                 # Add all new codes
                                 added_count = 0
                                 for code_info in new_codes:
-                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                    if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                         added_count += 1
                                 console.print(f"[green]Added {added_count} new HS codes for {country}.[/green]")
                                 
@@ -932,7 +976,7 @@ def run():
                                     for idx in selected_indices:
                                         if 0 <= idx < len(new_codes):
                                             code_info = new_codes[idx]
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                            if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                     console.print(f"[green]Added {added_count} selected HS codes for {country}.[/green]")
                                 except Exception:
@@ -940,17 +984,17 @@ def run():
                                     
                             elif save_option == 3:
                                 # Replace existing codes
-                                existing_codes = get_country_hs_codes(country)
+                                existing_codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                                 if existing_codes:
                                     confirm = typer.confirm(f"Are you sure you want to replace all existing HS codes for {country}?", default=False)
                                     if confirm:
                                         # Delete existing codes
                                         for code_info in existing_codes:
-                                            delete_country_hs_code(country, code_info['hs_code'])
+                                            delete_asia_hs_code(code_info['id'])
                                         # Add new codes
                                         added_count = 0
                                         for code_info in new_codes:
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                            if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                         console.print(f"[green]Replaced existing codes with {added_count} new HS codes for {country}.[/green]")
                                     else:
@@ -959,7 +1003,7 @@ def run():
                                     # No existing codes, just add new ones
                                     added_count = 0
                                     for code_info in new_codes:
-                                        if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                        if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                             added_count += 1
                                     console.print(f"[green]Added {added_count} new HS codes for {country}.[/green]")
                                     
