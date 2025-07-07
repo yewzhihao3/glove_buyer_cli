@@ -202,4 +202,62 @@ def parse_hs_codes_from_deepseek(output: str) -> List[Dict]:
                         'description': description
                     })
     
-    return codes 
+    return codes
+
+def query_deepseek_for_global_hs_codes() -> str:
+    """
+    Query DeepSeek to find global HS codes for gloves.
+    Returns the raw response from DeepSeek.
+    """
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'config', '.env'))
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    api_url = os.getenv('DEEPSEEK_API_URL', 'https://api.deepseek.com/v1/chat/completions')
+    if not api_key:
+        raise ValueError('DEEPSEEK_API_KEY not found in environment.')
+    
+    # Create a prompt for global HS codes
+    prompt = """
+    I need to find the most relevant global HS tariff codes for gloves, with PRIORITY on latex and nitrile gloves.
+
+    Please provide a list of HS tariff codes that are commonly used for gloves globally, 
+    along with their descriptions. Focus on the most relevant codes that would be used 
+    for importing or exporting gloves internationally.
+
+    IMPORTANT: Please format your response EXACTLY as follows:
+
+    1. HS Code: [8-10 digit tariff code] - Description: [detailed description]
+    2. HS Code: [8-10 digit tariff code] - Description: [detailed description]
+    3. HS Code: [8-10 digit tariff code] - Description: [detailed description]
+
+    Please provide 5-10 most relevant HS tariff codes for gloves globally.
+
+    PRIORITY ORDER:
+    1. Latex gloves (surgical, examination, medical)
+    2. Nitrile gloves (surgical, examination, industrial)
+    3. Other rubber gloves
+    4. Other glove types (textile, leather, etc.)
+
+    Requirements:
+    - Use full 8-10 digit HS tariff codes (e.g., 4015.12.1000, 4015.19.0000)
+    - Provide clear, concise descriptions
+    - Focus on codes commonly used internationally
+    - Include both import and export relevant codes
+    - Do not include any additional formatting, notes, or explanations after the numbered list
+    """
+    
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json',
+    }
+    data = {
+        "model": "deepseek-reasoner",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2
+    }
+    
+    response = requests.post(api_url, headers=headers, json=data)
+    response.raise_for_status()
+    result = response.json()
+    return result['choices'][0]['message']['content'] 

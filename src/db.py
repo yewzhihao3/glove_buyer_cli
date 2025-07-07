@@ -38,6 +38,17 @@ def init_db():
         )
     ''')
     
+    # Create global_hs_codes table for global HS codes
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS global_hs_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL,
+            source TEXT DEFAULT 'Manual',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -346,3 +357,90 @@ def get_duplicate_summary() -> List[Dict]:
         }
         for row in duplicates
     ]
+
+# Global HS Code Functions
+def get_all_global_hs_codes() -> List[Dict]:
+    """
+    Get all global HS codes from the database.
+    Returns a list of dicts with all columns.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, hs_code, description, source, created_at 
+        FROM global_hs_codes 
+        ORDER BY created_at DESC
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def save_global_hs_code(hs_code: str, description: str, source: str = 'Manual') -> bool:
+    """
+    Save a global HS code to the database.
+    Returns True if successful, False if duplicate.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute('''
+            INSERT INTO global_hs_codes (hs_code, description, source)
+            VALUES (?, ?, ?)
+        ''', (hs_code, description, source))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        # Duplicate entry
+        success = False
+    conn.close()
+    return success
+
+def update_global_hs_code(hs_code_id: int, new_hs_code: str, new_description: str) -> bool:
+    """
+    Update an existing global HS code by ID.
+    Returns True if successful, False if not found.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE global_hs_codes 
+        SET hs_code = ?, description = ?
+        WHERE id = ?
+    ''', (new_hs_code, new_description, hs_code_id))
+    conn.commit()
+    updated = c.rowcount > 0
+    conn.close()
+    return updated
+
+def delete_global_hs_code(hs_code_id: int) -> bool:
+    """
+    Delete a global HS code by ID.
+    Returns True if successful, False if not found.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM global_hs_codes WHERE id = ?', (hs_code_id,))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    return deleted
+
+def get_global_hs_code_by_id(hs_code_id: int) -> Dict:
+    """
+    Get a global HS code by ID.
+    Returns a dict with the HS code data or None if not found.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, hs_code, description, source, created_at 
+        FROM global_hs_codes 
+        WHERE id = ?
+    ''', (hs_code_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        columns = ['id', 'hs_code', 'description', 'source', 'created_at']
+        return dict(zip(columns, row))
+    return None

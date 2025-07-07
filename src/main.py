@@ -5,8 +5,8 @@ import os
 sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
-from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary
+from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_global_hs_code_by_id
 import pandas as pd
 import datetime
 import csv
@@ -418,66 +418,357 @@ def run():
             while True:
                 crud_choice = hs_code_crud_menu()
                 if crud_choice == 1:
-                    code = typer.prompt("Enter new HS Code")
-                    desc = typer.prompt("Enter description")
-                    success = add_hs_code(code, desc)
-                    if success:
-                        console.print(f"[green]HS Code {code} - {desc} added successfully![/green]")
-                    else:
-                        console.print(f"[red]HS Code {code} - {desc} already exists or could not be added.[/red]")
-                elif crud_choice == 2:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes to edit.[/red]")
+                    # Add New HS Code - Scope/Country flow
+                    console.print("[bold]Select scope for HS code:[/bold]")
+                    console.print("[cyan]1.[/cyan] Asia")
+                    console.print("[cyan]2.[/cyan] Global")
+                    console.print("[cyan]3.[/cyan] Back to HS Code Management")
+                    scope_choice = typer.prompt("Select scope", type=int)
+                    if scope_choice == 3:
                         continue
-                    console.print("[bold]Select HS code to edit:[/bold]")
-                    for idx, (code, desc) in enumerate(codes, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
+                    if scope_choice == 1:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                        scope_name = "Asia"
+                    elif scope_choice == 2:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                        scope_name = "Global"
+                    else:
+                        console.print("[red]Invalid scope selection.[/red]")
+                        continue
+                    # Country selection
+                    console.print(f"[bold]Select a country from {scope_name} or choose Global:[/bold]")
+                    for idx, country in enumerate(country_list, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {country}")
+                    console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Global (for global HS codes)[/italic]")
+                    console.print(f"[cyan]{len(country_list)+2}.[/cyan] Back to Scope Selection")
+                    country_idx = typer.prompt("Enter number to select country or global", type=int)
+                    if country_idx == len(country_list)+2:
+                        continue
+                    if 1 <= country_idx <= len(country_list):
+                        country = country_list[country_idx-1]
+                    elif country_idx == len(country_list)+1:
+                        country = "Global"
+                    else:
+                        console.print("[red]Invalid country selection.[/red]")
+                        continue
+                    # Ask for DeepSeek or manual
+                    console.print("[bold]How would you like to add HS codes for this selection?[/bold]")
+                    console.print("[cyan]1.[/cyan] Query DeepSeek for HS codes")
+                    console.print("[cyan]2.[/cyan] Manually add HS code")
+                    console.print("[cyan]3.[/cyan] Back to previous menu")
+                    add_method = typer.prompt("Select method", type=int)
+                    if add_method == 3:
+                        continue
+                    if add_method == 1:
+                        # Query DeepSeek for HS codes
+                        if country == "Global":
+                            console.print("[yellow]Querying DeepSeek for global HS codes...[/yellow]")
+                            try:
+                                with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                                    task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                                    progress.start_task(task)
+                                    deepseek_response = query_deepseek_for_global_hs_codes()
+                                console.print("[bold green]DeepSeek Results:[/bold green]")
+                                console.print(deepseek_response)
+                                new_codes = parse_hs_codes_from_deepseek(deepseek_response)
+                                if new_codes:
+                                    console.print(f"\n[green]Found {len(new_codes)} new HS codes:[/green]")
+                                    for idx, code_info in enumerate(new_codes, 1):
+                                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                                    console.print("\n[bold]What would you like to do with these codes?[/bold]")
+                                    console.print("[cyan]1.[/cyan] Add all new codes")
+                                    console.print("[cyan]2.[/cyan] Select specific codes to add")
+                                    console.print("[cyan]3.[/cyan] Skip saving")
+                                    save_option = typer.prompt("Select option", type=int)
+                                    if save_option == 1:
+                                        added_count = 0
+                                        for code_info in new_codes:
+                                            if save_global_hs_code(code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                added_count += 1
+                                        console.print(f"[green]Added {added_count} new HS codes to database.[/green]")
+                                    elif save_option == 2:
+                                        console.print("[bold]Select codes to add (comma-separated numbers):[/bold]")
+                                        for idx, code_info in enumerate(new_codes, 1):
+                                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                                        selection = typer.prompt("Enter numbers (e.g., 1,3,5)")
+                                        try:
+                                            selected_indices = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
+                                            added_count = 0
+                                            for idx in selected_indices:
+                                                if 0 <= idx < len(new_codes):
+                                                    code_info = new_codes[idx]
+                                                    if save_global_hs_code(code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                        added_count += 1
+                                            console.print(f"[green]Added {added_count} selected HS codes to database.[/green]")
+                                        except Exception:
+                                            console.print("[red]Invalid selection format.[/red]")
+                                    elif save_option == 3:
+                                        console.print("[yellow]Skipped saving new codes.[/yellow]")
+                                    else:
+                                        console.print("[red]Invalid option.[/red]")
+                                else:
+                                    console.print("[red]No HS codes found in DeepSeek response.[/red]")
+                            except Exception as e:
+                                console.print(f"[red]Error querying DeepSeek: {e}[/red]")
+                        else:
+                            console.print(f"[yellow]Querying DeepSeek for {country}-specific HS codes...[/yellow]")
+                            try:
+                                with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                                    task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                                    progress.start_task(task)
+                                    deepseek_response = query_deepseek_for_hs_codes(country)
+                                console.print("[bold green]DeepSeek Results:[/bold green]")
+                                console.print(deepseek_response)
+                                new_codes = parse_hs_codes_from_deepseek(deepseek_response)
+                                if new_codes:
+                                    console.print(f"\n[green]Found {len(new_codes)} new HS codes for {country}:[/green]")
+                                    for idx, code_info in enumerate(new_codes, 1):
+                                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                                    console.print("\n[bold]What would you like to do with these codes?[/bold]")
+                                    console.print("[cyan]1.[/cyan] Add all new codes")
+                                    console.print("[cyan]2.[/cyan] Select specific codes to add")
+                                    console.print("[cyan]3.[/cyan] Skip saving")
+                                    save_option = typer.prompt("Select option", type=int)
+                                    if save_option == 1:
+                                        added_count = 0
+                                        for code_info in new_codes:
+                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                added_count += 1
+                                        console.print(f"[green]Added {added_count} new HS codes for {country} to database.[/green]")
+                                    elif save_option == 2:
+                                        console.print("[bold]Select codes to add (comma-separated numbers):[/bold]")
+                                        for idx, code_info in enumerate(new_codes, 1):
+                                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                                        selection = typer.prompt("Enter numbers (e.g., 1,3,5)")
+                                        try:
+                                            selected_indices = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
+                                            added_count = 0
+                                            for idx in selected_indices:
+                                                if 0 <= idx < len(new_codes):
+                                                    code_info = new_codes[idx]
+                                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                        added_count += 1
+                                            console.print(f"[green]Added {added_count} selected HS codes for {country} to database.[/green]")
+                                        except Exception:
+                                            console.print("[red]Invalid selection format.[/red]")
+                                    elif save_option == 3:
+                                        console.print("[yellow]Skipped saving new codes.[/yellow]")
+                                    else:
+                                        console.print("[red]Invalid option.[/red]")
+                                else:
+                                    console.print("[red]No HS codes found in DeepSeek response.[/red]")
+                            except Exception as e:
+                                console.print(f"[red]Error querying DeepSeek: {e}[/red]")
+                    elif add_method == 2:
+                        # Manually add HS code
+                        hs_code = typer.prompt("Enter HS Code")
+                        description = typer.prompt("Enter description")
+                        source = typer.prompt("Enter source (optional)", default="Manual")
+                        if country == "Global":
+                            success = save_global_hs_code(hs_code, description, source)
+                            if success:
+                                console.print(f"[green]HS Code {hs_code} - {description} added to global codes.[/green]")
+                            else:
+                                console.print(f"[red]HS Code {hs_code} already exists in global codes.[/red]")
+                        else:
+                            success = save_country_hs_code(country, hs_code, description, source)
+                            if success:
+                                console.print(f"[green]HS Code {hs_code} - {description} added for {country}.[/green]")
+                            else:
+                                console.print(f"[red]HS Code {hs_code} already exists for {country}.[/red]")
+                    else:
+                        console.print("[red]Invalid option.[/red]")
+                elif crud_choice == 2:
+                    # Edit Existing HS Code (country-specific only)
+                    console.print("[bold]Edit Country-Specific HS Code[/bold]")
+                    console.print("[bold]Select scope for country:[/bold]")
+                    console.print("[cyan]1.[/cyan] Asia")
+                    console.print("[cyan]2.[/cyan] Global")
+                    console.print("[cyan]3.[/cyan] Back to HS Code Management")
+                    region_choice = typer.prompt("Select region", type=int)
+                    if region_choice == 3:
+                        continue
+                    if region_choice == 1:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                    elif region_choice == 2:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                    else:
+                        console.print("[red]Invalid region selection.[/red]")
+                        continue
+                    console.print("[bold]Select country:[/bold]")
+                    for idx, country in enumerate(country_list, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {country}")
+                    console.print(f"[cyan]{len(country_list)+1}.[/cyan] Back to previous menu")
+                    country_idx = typer.prompt("Enter number to select country", type=int)
+                    if country_idx == len(country_list)+1:
+                        continue
+                    if 1 <= country_idx <= len(country_list):
+                        country = country_list[country_idx-1]
+                    else:
+                        console.print("[red]Invalid country selection.[/red]")
+                        continue
+                    codes = get_country_hs_codes(country)
+                    if not codes:
+                        console.print(f"[red]No HS codes to edit for {country}.[/red]")
+                        continue
+                    console.print(f"[bold]Select HS code to edit for {country}:[/bold]")
+                    for idx, code_info in enumerate(codes, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
                     idx = typer.prompt("Enter number to edit", type=int)
                     if 1 <= idx <= len(codes):
-                        old_code, old_desc = codes[idx-1]
-                        new_code = typer.prompt("Enter new HS Code", default=old_code)
-                        new_desc = typer.prompt("Enter new description", default=old_desc)
-                        success = edit_hs_code(idx, new_code, new_desc)
-                        if success:
-                            console.print(f"[green]HS Code updated to: {new_code} - {new_desc}[/green]")
+                        old_code_info = codes[idx-1]
+                        # Field selection
+                        fields = ['hs_code', 'description', 'source']
+                        field_names = ['HS Code', 'Description', 'Source']
+                        console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
+                        console.print("[cyan]1.[/cyan] Single Field")
+                        console.print("[cyan]2.[/cyan] Multiple Fields")
+                        mode = typer.prompt("Enter 1 or 2", type=int)
+                        updated_fields = {}
+                        if mode == 1:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idx = typer.prompt("Select field number to edit", type=int)
+                            if 1 <= field_idx <= len(fields):
+                                field = fields[field_idx-1]
+                                new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=old_code_info.get(field, ''))
+                                if new_val != old_code_info.get(field, ''):
+                                    updated_fields[field] = new_val
+                            else:
+                                console.print("[red]Invalid field selection.[/red]")
+                        elif mode == 2:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3)")
+                            try:
+                                selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
+                                for field_idx in selected:
+                                    if 1 <= field_idx <= len(fields):
+                                        field = fields[field_idx-1]
+                                        new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=old_code_info.get(field, ''))
+                                        if new_val != old_code_info.get(field, ''):
+                                            updated_fields[field] = new_val
+                                    else:
+                                        console.print(f"[red]Invalid field number: {field_idx}")
+                            except Exception:
+                                console.print("[red]Invalid input format.[/red]")
                         else:
-                            console.print("[red]Failed to update HS Code.[/red]")
+                            console.print("[red]Invalid selection.[/red]")
+                        # Save changes
+                        if updated_fields:
+                            # Always require hs_code and description for update_country_hs_code
+                            new_hs_code = updated_fields.get('hs_code', old_code_info['hs_code'])
+                            new_description = updated_fields.get('description', old_code_info['description'])
+                            # If source is updated, update it separately
+                            update_success = update_country_hs_code(country, old_code_info['hs_code'], new_hs_code, new_description)
+                            if update_success and 'source' in updated_fields:
+                                # Direct DB update for source
+                                from db import DB_PATH
+                                import sqlite3
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute('UPDATE country_hs_codes SET source = ? WHERE country = ? AND hs_code = ?', (updated_fields['source'], country, new_hs_code))
+                                conn.commit()
+                                conn.close()
+                            if update_success:
+                                console.print("[green]HS code updated successfully![/green]")
+                            else:
+                                console.print("[red]Failed to update HS code.[/red]")
+                        else:
+                            console.print("[yellow]No changes made.[/yellow]")
                     else:
                         console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 3:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes to delete.[/red]")
+                    # Delete Country-Specific HS Code (no global option)
+                    console.print("[bold]Delete Country-Specific HS Code[/bold]")
+                    console.print("[bold]Select scope for country:[/bold]")
+                    console.print("[cyan]1.[/cyan] Asia")
+                    console.print("[cyan]2.[/cyan] Global")
+                    console.print("[cyan]3.[/cyan] Back to HS Code Management")
+                    region_choice = typer.prompt("Select region", type=int)
+                    if region_choice == 3:
                         continue
-                    console.print("[bold]Select HS code to delete:[/bold]")
-                    for idx, (code, desc) in enumerate(codes, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
-                    idx = typer.prompt("Enter number to delete", type=int)
-                    if 1 <= idx <= len(codes):
-                        code, desc = codes[idx-1]
-                        confirm = typer.confirm(f"Are you sure you want to delete {code} - {desc}?", default=False)
+                    if region_choice == 1:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                    elif region_choice == 2:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                    else:
+                        console.print("[red]Invalid region selection.[/red]")
+                        continue
+                    console.print("[bold]Select country:[/bold]")
+                    for idx, country in enumerate(country_list, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {country}")
+                    console.print(f"[cyan]{len(country_list)+1}.[/cyan] Back to previous menu")
+                    country_idx = typer.prompt("Enter number to select country", type=int)
+                    if country_idx == len(country_list)+1:
+                        continue
+                    if 1 <= country_idx <= len(country_list):
+                        country = country_list[country_idx-1]
+                    else:
+                        console.print("[red]Invalid country selection.[/red]")
+                        continue
+                    codes = get_country_hs_codes(country)
+                    if not codes:
+                        console.print(f"[red]No HS codes to delete for {country}.[/red]")
+                        continue
+                    console.print(f"[bold]Select HS code(s) to delete for {country} (comma-separated numbers, e.g. 1,3,5):[/bold]")
+                    for idx, code_info in enumerate(codes, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                    selection = typer.prompt("Enter number(s) to delete (comma-separated)")
+                    try:
+                        selected_indices = [int(x.strip())-1 for x in selection.split(',') if x.strip().isdigit()]
+                        to_delete = [codes[idx] for idx in selected_indices if 0 <= idx < len(codes)]
+                        if not to_delete:
+                            console.print("[red]No valid codes selected for deletion.[/red]")
+                            continue
+                        confirm = typer.confirm(f"Are you sure you want to delete {len(to_delete)} HS code(s) for {country}?", default=False)
                         if confirm:
-                            success = delete_hs_code(idx)
-                            if success:
-                                console.print(f"[green]HS Code {code} - {desc} deleted.[/green]")
-                            else:
-                                console.print("[red]Failed to delete HS Code.[/red]")
+                            deleted_count = 0
+                            for code_info in to_delete:
+                                success = delete_country_hs_code(country, code_info['hs_code'])
+                                if success:
+                                    deleted_count += 1
+                            console.print(f"[green]{deleted_count} HS code(s) deleted for {country}.[/green]")
                         else:
                             console.print("[yellow]Delete cancelled.[/yellow]")
+                    except Exception:
+                        console.print("[red]Invalid input format.[/red]")
                 elif crud_choice == 4:
-                    codes = load_hs_codes_xlsx()
-                    if not codes:
-                        console.print("[red]No HS codes found.[/red]")
+                    # View All HS Codes (global and country-specific)
+                    global_codes = get_all_global_hs_codes()
+                    country_codes = get_all_country_hs_codes()
+                    if not global_codes and not country_codes:
+                        console.print("[red]No HS codes found in database.[/red]")
                     else:
-                        table = Table(title="HS Codes List")
+                        table = Table(title="All HS Codes (Global & Country-Specific)", show_lines=True)
                         table.add_column("No.", style="cyan", justify="right")
+                        table.add_column("Scope/Country", style="green")
                         table.add_column("HS Code", style="magenta")
-                        table.add_column("Description", style="green")
-                        for idx, (code, desc) in enumerate(codes, 1):
-                            table.add_row(str(idx), code, desc)
+                        table.add_column("Description", style="yellow")
+                        table.add_column("Source", style="blue")
+                        table.add_column("Created", style="dim")
+                        idx = 1
+                        for code_info in global_codes:
+                            table.add_row(
+                                str(idx),
+                                "Global",
+                                code_info['hs_code'],
+                                code_info['description'],
+                                code_info['source'],
+                                code_info['created_at']
+                            )
+                            idx += 1
+                        for code_info in country_codes:
+                            table.add_row(
+                                str(idx),
+                                code_info['country'],
+                                code_info['hs_code'],
+                                code_info['description'],
+                                code_info['source'],
+                                code_info['created_at']
+                            )
+                            idx += 1
                         console.print(table)
-                    # Future enhancement: Add search/filter functionality here
                 elif crud_choice == 5:
                     break
                 else:
@@ -542,13 +833,65 @@ def run():
                     idx = typer.prompt("Enter number to edit", type=int)
                     if 1 <= idx <= len(country_codes):
                         old_code_info = country_codes[idx-1]
-                        new_hs_code = typer.prompt("Enter new HS code", default=old_code_info['hs_code'])
-                        new_description = typer.prompt("Enter new description", default=old_code_info['description'])
-                        success = update_country_hs_code(country, old_code_info['hs_code'], new_hs_code, new_description)
-                        if success:
-                            console.print(f"[green]HS code updated to: {new_hs_code} - {new_description}[/green]")
+                        # Field selection
+                        fields = ['hs_code', 'description', 'source']
+                        field_names = ['HS Code', 'Description', 'Source']
+                        console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
+                        console.print("[cyan]1.[/cyan] Single Field")
+                        console.print("[cyan]2.[/cyan] Multiple Fields")
+                        mode = typer.prompt("Enter 1 or 2", type=int)
+                        updated_fields = {}
+                        if mode == 1:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idx = typer.prompt("Select field number to edit", type=int)
+                            if 1 <= field_idx <= len(fields):
+                                field = fields[field_idx-1]
+                                new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=old_code_info.get(field, ''))
+                                if new_val != old_code_info.get(field, ''):
+                                    updated_fields[field] = new_val
+                            else:
+                                console.print("[red]Invalid field selection.[/red]")
+                        elif mode == 2:
+                            for i, name in enumerate(field_names, 1):
+                                console.print(f"[cyan]{i}.[/cyan] {name}")
+                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3)")
+                            try:
+                                selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
+                                for field_idx in selected:
+                                    if 1 <= field_idx <= len(fields):
+                                        field = fields[field_idx-1]
+                                        new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=old_code_info.get(field, ''))
+                                        if new_val != old_code_info.get(field, ''):
+                                            updated_fields[field] = new_val
+                                    else:
+                                        console.print(f"[red]Invalid field number: {field_idx}")
+                            except Exception:
+                                console.print("[red]Invalid input format.[/red]")
                         else:
-                            console.print("[red]Failed to update HS code.[/red]")
+                            console.print("[red]Invalid selection.[/red]")
+                        # Save changes
+                        if updated_fields:
+                            # Always require hs_code and description for update_country_hs_code
+                            new_hs_code = updated_fields.get('hs_code', old_code_info['hs_code'])
+                            new_description = updated_fields.get('description', old_code_info['description'])
+                            # If source is updated, update it separately
+                            update_success = update_country_hs_code(country, old_code_info['hs_code'], new_hs_code, new_description)
+                            if update_success and 'source' in updated_fields:
+                                # Direct DB update for source
+                                from db import DB_PATH
+                                import sqlite3
+                                conn = sqlite3.connect(DB_PATH)
+                                c = conn.cursor()
+                                c.execute('UPDATE country_hs_codes SET source = ? WHERE country = ? AND hs_code = ?', (updated_fields['source'], country, new_hs_code))
+                                conn.commit()
+                                conn.close()
+                            if update_success:
+                                console.print("[green]HS code updated successfully![/green]")
+                            else:
+                                console.print("[red]Failed to update HS code.[/red]")
+                        else:
+                            console.print("[yellow]No changes made.[/yellow]")
                     else:
                         console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 5:
@@ -570,7 +913,7 @@ def run():
                             if success:
                                 console.print(f"[green]HS code {code_info['hs_code']} for {country} deleted.[/green]")
                             else:
-                                console.print("[red]Failed to delete HS code.[/red]")
+                                console.print(f"[red]Failed to delete HS code for {country}.[/red]")
                         else:
                             console.print("[yellow]Delete cancelled.[/yellow]")
                     else:
