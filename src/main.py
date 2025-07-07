@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_global_hs_code_by_id, init_international_hs_codes, get_all_international_hs_codes
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, init_international_hs_codes, get_all_international_hs_codes, get_all_asia_hs_codes, save_asia_hs_code, check_existing_buyer_leads, insert_buyer_leads
 import pandas as pd
 import datetime
 import csv
@@ -79,8 +79,8 @@ def load_country_list(path):
     with open(path, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
-def perform_buyer_search(country, selected_code, selected_desc):
-    """Helper function to perform the actual buyer search process"""
+def perform_buyer_search(scope, country, selected_code, selected_desc):
+    """Helper function to perform the actual buyer search process (with country and scope)"""
     # Step 1: Keyword selection
     keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
     with open(keyword_file, 'r', encoding='utf-8') as f:
@@ -91,10 +91,8 @@ def perform_buyer_search(country, selected_code, selected_desc):
     console.print(f"[cyan]{len(keyword_options)+1}.[/cyan] [italic]Custom Keyword[/italic]")
     console.print(f"[cyan]{len(keyword_options)+2}.[/cyan] Back to HS Code Selection")
     keyword_choice = typer.prompt("Enter number to select keyword or custom", type=int)
-    
     if keyword_choice == len(keyword_options)+2:
         return False  # Back to HS Code Selection
-    
     if 1 <= keyword_choice <= len(keyword_options):
         keyword = keyword_options[keyword_choice-1]
     elif keyword_choice == len(keyword_options)+1:
@@ -102,27 +100,20 @@ def perform_buyer_search(country, selected_code, selected_desc):
     else:
         console.print("[red]Invalid keyword selection.[/red]")
         return False
-    
-    # Step 2: Check for existing buyer results first
-    existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
-    
+    # Step 2: Check for existing buyer leads first
+    existing_buyers = check_existing_buyer_leads(scope, selected_code, keyword)
     if existing_buyers:
-        console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
+        console.print(f"[green]Found {len(existing_buyers)} existing buyer leads for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
         for idx, buyer in enumerate(existing_buyers, 1):
             console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
-        
         console.print("\n[bold]Options:[/bold]")
         console.print("[cyan]1.[/cyan] Use existing results")
         console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
         console.print("[cyan]3.[/cyan] Back to keyword selection")
-        
         buyer_option = typer.prompt("Select option", type=int)
-        
         if buyer_option == 1:
-            # Use existing results
-            console.print("[green]Using existing buyer results.[/green]")
+            console.print("[green]Using existing buyer leads.[/green]")
         elif buyer_option == 2:
-            # Query DeepSeek for new results (excluding existing companies)
             existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
             console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
             try:
@@ -132,11 +123,12 @@ def perform_buyer_search(country, selected_code, selected_desc):
                     result = query_deepseek(selected_code, keyword, country, existing_company_names)
                 console.print("[bold green]DeepSeek Results:[/bold green]")
                 console.print(result)
-                # Save to DB
                 companies = parse_deepseek_output(result)
                 console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                # Save to both old results table and new scope-specific table
                 insert_results(selected_code, keyword, country, companies)
-                console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+                insert_buyer_leads(scope, selected_code, keyword, companies)
+                console.print(f"[green]{len(companies)} companies saved to both results and {scope} buyer leads (duplicates skipped).[/green]")
             except Exception as e:
                 console.print(f"[red]Error: {e}[/red]")
         elif buyer_option == 3:
@@ -151,18 +143,18 @@ def perform_buyer_search(country, selected_code, selected_desc):
             with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
                 task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
                 progress.start_task(task)
-                result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
+                result = query_deepseek(selected_code, keyword, country, [])
             console.print("[bold green]DeepSeek Results:[/bold green]")
             console.print(result)
-            # Save to DB
             companies = parse_deepseek_output(result)
             console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+            # Save to both old results table and new scope-specific table
             insert_results(selected_code, keyword, country, companies)
-            console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+            insert_buyer_leads(scope, selected_code, keyword, companies)
+            console.print(f"[green]{len(companies)} companies saved to both results and {scope} buyer leads (duplicates skipped).[/green]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
             return False
-    
     return True  # Search completed successfully
 
 def select_country_and_scope():
@@ -216,202 +208,207 @@ def run():
         choice = main_menu()
         if choice == 1:
             # Start the buyer search flow
-            last_country = None  # Track the last country used
-            
+            last_country = None
+            last_scope_name = None
             while True:
-                # Determine if we should use the last country or select a new one
+                # Step 1: Country selection (with previous country check)
                 if last_country:
                     console.print(f"[bold]Do you want to continue with the previous country ({last_country})?[/bold]")
                     console.print("[cyan]1.[/cyan] Yes, use the same country")
                     console.print("[cyan]2.[/cyan] No, select a different country")
                     console.print("[cyan]3.[/cyan] Back to Main Menu")
                     use_same_country = typer.prompt("Select option", type=int)
-                    
                     if use_same_country == 3:
                         break
                     elif use_same_country == 1:
                         country = last_country
+                        scope_name = last_scope_name
                     elif use_same_country == 2:
                         # Select new country and scope
-                        result = select_country_and_scope()
-                        if result[0] is None:
+                        console.print("[bold]Choose search scope:[/bold]")
+                        console.print("[cyan]1.[/cyan] Asia")
+                        console.print("[cyan]2.[/cyan] Global")
+                        console.print("[cyan]3.[/cyan] Back to Main Menu")
+                        scope = typer.prompt("Enter number for scope", type=int)
+                        if scope == 3:
                             break
-                        country, scope_name = result
+                        if scope == 1:
+                            country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                            scope_name = "Asia"
+                        elif scope == 2:
+                            country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                            scope_name = "Global"
+                        else:
+                            console.print("[red]Invalid scope selection.[/red]")
+                            continue
+                        console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
+                        for idx, ctry in enumerate(country_list, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {ctry}")
+                        console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Enter a custom country[/italic]")
+                        console.print(f"[cyan]{len(country_list)+2}.[/cyan] Back to Scope Selection")
+                        country_idx = typer.prompt("Enter number to select country or custom", type=int)
+                        if country_idx == len(country_list)+2:
+                            continue
+                        if 1 <= country_idx <= len(country_list):
+                            country = country_list[country_idx-1]
+                        elif country_idx == len(country_list)+1:
+                            country = typer.prompt("Enter custom country name")
+                        else:
+                            console.print("[red]Invalid country selection.[/red]")
+                            continue
                         last_country = country
+                        last_scope_name = scope_name
                     else:
                         console.print("[red]Invalid option.[/red]")
-                        continue
+                    continue
                 else:
-                    # First time - select country and scope
-                    result = select_country_and_scope()
-                    if result[0] is None:
+                    # No previous country, select scope/country
+                    console.print("[bold]Choose search scope:[/bold]")
+                    console.print("[cyan]1.[/cyan] Asia")
+                    console.print("[cyan]2.[/cyan] Global")
+                    console.print("[cyan]3.[/cyan] Back to Main Menu")
+                    scope = typer.prompt("Enter number for scope", type=int)
+                    if scope == 3:
                         break
-                    country, scope_name = result
+                    if scope == 1:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                        scope_name = "Asia"
+                    elif scope == 2:
+                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                        scope_name = "Global"
+                    else:
+                        console.print("[red]Invalid scope selection.[/red]")
+                        continue
+                    console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
+                    for idx, ctry in enumerate(country_list, 1):
+                        console.print(f"[cyan]{idx}.[/cyan] {ctry}")
+                    console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Enter a custom country[/italic]")
+                    console.print(f"[cyan]{len(country_list)+2}.[/cyan] Back to Scope Selection")
+                    country_idx = typer.prompt("Enter number to select country or custom", type=int)
+                    if country_idx == len(country_list)+2:
+                        continue
+                    if 1 <= country_idx <= len(country_list):
+                        country = country_list[country_idx-1]
+                    elif country_idx == len(country_list)+1:
+                        country = typer.prompt("Enter custom country name")
+                    else:
+                        console.print("[red]Invalid country selection.[/red]")
+                        continue
                     last_country = country
+                    last_scope_name = scope_name
                 
-                # Step 3: Check for existing country-specific HS codes
-                existing_codes = get_country_hs_codes(country)
-                
-                if existing_codes:
-                    # Show existing codes
-                    console.print(f"[green]Found {len(existing_codes)} existing HS codes for {country}:[/green]")
-                    for idx, code_info in enumerate(existing_codes, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                # Step 2: HS code selection for the selected country
+                if scope_name == "Asia":
+                    codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                 else:
-                    # No existing codes - ask user what to do
-                    console.print(f"[yellow]No existing HS codes found for {country}.[/yellow]")
+                    codes = [c for c in get_all_global_hs_codes() if c['country'].lower() == country.lower()]
+                
+                if not codes:
+                    console.print(f"[red]No {scope_name} HS codes available for {country}.")
                     console.print("[bold]Options:[/bold]")
-                    console.print("[cyan]1.[/cyan] Query DeepSeek for country-specific HS codes")
+                    console.print("[cyan]1.[/cyan] Query DeepSeek for new HS codes")
                     console.print("[cyan]2.[/cyan] Use international HS codes")
                     console.print("[cyan]3.[/cyan] Back to Country Selection")
-                    
-                    option = typer.prompt("Select option", type=int)
-                    
-                    if option == 3:
+                    fallback_choice = typer.prompt("Select option", type=int)
+                    if fallback_choice == 3:
                         continue
-                    
-                    if option == 1:
-                        # Query DeepSeek for new codes
-                        console.print(f"[yellow]Querying DeepSeek for {country}-specific HS codes...[/yellow]")
-                        try:
-                            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                                task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                                progress.start_task(task)
+                    if fallback_choice == 1:
+                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                            task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                            progress.start_task(task)
+                            if scope_name == "Asia":
                                 deepseek_response = query_deepseek_for_hs_codes(country)
-                            
-                            # Parse the response
-                            new_codes = parse_hs_codes_from_deepseek(deepseek_response)
-                            
-                            if new_codes:
-                                console.print(f"[green]Found {len(new_codes)} new HS codes for {country}:[/green]")
+                            else:
+                                deepseek_response = query_deepseek_for_global_hs_codes()
+                        new_codes = parse_hs_codes_from_deepseek(deepseek_response)
+                        if new_codes:
+                            console.print(f"[green]Found {len(new_codes)} new HS codes:")
+                            for idx, code_info in enumerate(new_codes, 1):
+                                console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
+                            console.print("[bold]What would you like to do with these codes?[/bold]")
+                            console.print("[cyan]1.[/cyan] Add all new codes")
+                            console.print("[cyan]2.[/cyan] Select specific codes to add")
+                            console.print("[cyan]3.[/cyan] Skip saving")
+                            save_option = typer.prompt("Select option", type=int)
+                            if save_option == 1:
+                                added_count = 0
+                                for code_info in new_codes:
+                                    if scope_name == "Asia":
+                                        if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                            added_count += 1
+                                    else:
+                                        if save_global_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                            added_count += 1
+                                console.print(f"[green]{added_count} HS codes have been saved to the database.[/green]")
+                                codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()] if scope_name == "Asia" else [c for c in get_all_global_hs_codes() if c['country'].lower() == country.lower()]
+                            elif save_option == 2:
+                                console.print("[bold]Select codes to add (comma-separated numbers):[/bold]")
                                 for idx, code_info in enumerate(new_codes, 1):
                                     console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
-                                
-                                console.print("\n[bold]What would you like to do with these codes?[/bold]")
-                                console.print("[cyan]1.[/cyan] Add all new codes")
-                                console.print("[cyan]2.[/cyan] Select specific codes to add")
-                                console.print("[cyan]3.[/cyan] Skip saving")
-                                console.print("[cyan]4.[/cyan] Back to Main Menu")
-                                
-                                save_option = typer.prompt("Select option", type=int)
-                                
-                                if save_option == 4:
-                                    break
-                                
-                                if save_option == 1:
-                                    # Add all new codes
+                                selection = typer.prompt("Enter numbers (e.g., 1,3,5)")
+                                try:
+                                    selected_indices = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
                                     added_count = 0
-                                    for code_info in new_codes:
-                                        if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
-                                            added_count += 1
-                                    console.print(f"[green]{added_count} HS codes have been saved to the database.[/green]")
-                                    
-                                elif save_option == 2:
-                                    # Select specific codes
-                                    console.print("[bold]Select codes to add (comma-separated numbers):[/bold]")
-                                    for idx, code_info in enumerate(new_codes, 1):
-                                        console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
-                                    selection = typer.prompt("Enter numbers (e.g., 1,3,5)")
-                                    try:
-                                        selected_indices = [int(x.strip()) - 1 for x in selection.split(',') if x.strip().isdigit()]
-                                        added_count = 0
-                                        for idx in selected_indices:
-                                            if 0 <= idx < len(new_codes):
-                                                code_info = new_codes[idx]
-                                                if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
+                                    for idx in selected_indices:
+                                        if 0 <= idx < len(new_codes):
+                                            code_info = new_codes[idx]
+                                            if scope_name == "Asia":
+                                                if save_asia_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                     added_count += 1
-                                        console.print(f"[green]{added_count} HS codes have been saved to the database.[/green]")
-                                    except Exception:
-                                        console.print("[red]Invalid selection format.[/red]")
-                                        continue
-                                        
-                                elif save_option == 3:
-                                    console.print("[yellow]Skipped saving new codes.[/yellow]")
-                                else:
-                                    console.print("[red]Invalid option.[/red]")
+                                            else:
+                                                if save_global_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
+                                                    added_count += 1
+                                    console.print(f"[green]{added_count} HS codes have been saved to the database.[/green]")
+                                    codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()] if scope_name == "Asia" else [c for c in get_all_global_hs_codes() if c['country'].lower() == country.lower()]
+                                except Exception:
+                                    console.print("[red]Invalid selection format.[/red]")
                                     continue
-                                
-                                # Update existing_codes with newly saved codes
-                                existing_codes = get_country_hs_codes(country)
-                            else:
-                                console.print("[red]No HS codes found in DeepSeek response.[/red]")
+                            elif save_option == 3:
+                                console.print("[yellow]Skipped saving new codes.[/yellow]")
                                 continue
-                                
-                        except Exception as e:
-                            console.print(f"[red]Error querying DeepSeek: {e}[/red]")
+                            else:
+                                console.print("[red]Invalid option.[/red]")
+                                continue
+                        else:
+                            console.print("[red]No HS codes found in DeepSeek response.[/red]")
                             continue
-                            
-                    elif option == 2:
-                        codes = get_all_international_hs_codes()
+                    elif fallback_choice == 2:
+                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                            task = progress.add_task("[yellow]Loading international HS codes...", start=False)
+                            progress.start_task(task)
+                            codes = get_all_international_hs_codes()
                         if not codes:
                             console.print("[red]No international HS codes available.[/red]")
                             continue
-                        console.print("[bold]Select from international HS codes:[/bold]")
-                        for idx, code_info in enumerate(codes, 1):
-                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
-                        console.print(f"[cyan]{len(codes)+1}.[/cyan] Back to Country Selection")
-                        idx = typer.prompt("Enter number to select", type=int)
-                        if idx == len(codes)+1:
-                            continue
-                        if 1 <= idx <= len(codes):
-                            selected_code = codes[idx-1]['hs_code']
-                            selected_desc = codes[idx-1]['description']
-                            console.print(f"[green]Selected HS Code:[/green] [bold]{selected_code}[/bold] - {selected_desc}")
-                            # Perform buyer search
-                            if perform_buyer_search(country, selected_code, selected_desc):
-                                console.print("[bold]Do you want to continue with another buyer search?[/bold]")
-                                console.print("[cyan]1.[/cyan] Yes, continue with another search")
-                                console.print("[cyan]2.[/cyan] No, back to main menu")
-                                continue_search_choice = typer.prompt("Select option", type=int)
-                                if continue_search_choice == 2:
-                                    break
-                        else:
-                            console.print("[red]Invalid selection.[/red]")
-                            continue
+                        scope_name = "International"
                     else:
                         console.print("[red]Invalid option.[/red]")
                     continue
                 
-                # Step 4: Ask if user wants to continue to buyer search
-                if existing_codes:
-                    console.print("[bold]Do you want to continue with buyer search?[/bold]")
-                    console.print("[cyan]1.[/cyan] Yes, continue to buyer search")
-                    console.print("[cyan]2.[/cyan] No, back to main menu")
-                    continue_choice = typer.prompt("Select option", type=int)
-                    if continue_choice == 2:
-                        break
-                
-                # Step 5: HS Code selection (if we have codes to select from)
-                if existing_codes:
+                # Step 3: HS code selection
+                if codes:
                     console.print(f"[bold]Select HS code to use for {country}:[/bold]")
-                    for idx, code_info in enumerate(existing_codes, 1):
+                    for idx, code_info in enumerate(codes, 1):
                         console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
-                    console.print(f"[cyan]{len(existing_codes)+1}.[/cyan] Back to Country Selection")
+                    console.print(f"[cyan]{len(codes)+1}.[/cyan] Back to Country Selection")
                     idx = typer.prompt("Enter number to select", type=int)
-                    
-                    if idx == len(existing_codes)+1:
+                    if idx == len(codes)+1:
                         continue
-                    if 1 <= idx <= len(existing_codes):
-                        selected_code_info = existing_codes[idx-1]
-                        selected_code = selected_code_info['hs_code']
-                        selected_desc = selected_code_info['description']
+                    if 1 <= idx <= len(codes):
+                        selected_code = codes[idx-1]['hs_code']
+                        selected_desc = codes[idx-1]['description']
                         console.print(f"[green]Selected HS Code:[/green] [bold]{selected_code}[/bold] - {selected_desc}")
+                        # Step 4: Keyword selection and search
+                        if perform_buyer_search(scope_name, country, selected_code, selected_desc):
+                            console.print("[bold]Do you want to continue with another buyer search?[/bold]")
+                            console.print("[cyan]1.[/cyan] Yes, continue with another search")
+                            console.print("[cyan]2.[/cyan] No, back to main menu")
+                            continue_search_choice = typer.prompt("Select option", type=int)
+                            if continue_search_choice == 2:
+                                break
                     else:
                         console.print("[red]Invalid selection.[/red]")
-                        continue
-                else:
-                    # No codes available, break the loop
-                    break
-                
-                # Step 6: Perform buyer search
-                if perform_buyer_search(country, selected_code, selected_desc):
-                    # Ask if user wants to continue
-                    console.print("[bold]Do you want to continue with another buyer search?[/bold]")
-                    console.print("[cyan]1.[/cyan] Yes, continue with another search")
-                    console.print("[cyan]2.[/cyan] No, back to main menu")
-                    continue_search_choice = typer.prompt("Select option", type=int)
-                    if continue_search_choice == 2:
-                        break
+                    continue
         elif choice == 2:
             while True:
                 crud_choice = hs_code_crud_menu()
@@ -481,7 +478,7 @@ def run():
                                     if save_option == 1:
                                         added_count = 0
                                         for code_info in new_codes:
-                                            if save_global_hs_code(code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                            if save_global_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                         console.print(f"[green]Added {added_count} new HS codes to database.[/green]")
                                     elif save_option == 2:
@@ -495,7 +492,7 @@ def run():
                                             for idx in selected_indices:
                                                 if 0 <= idx < len(new_codes):
                                                     code_info = new_codes[idx]
-                                                    if save_global_hs_code(code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                    if save_global_hs_code(code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                         added_count += 1
                                             console.print(f"[green]Added {added_count} selected HS codes to database.[/green]")
                                         except Exception:
@@ -530,7 +527,7 @@ def run():
                                     if save_option == 1:
                                         added_count = 0
                                         for code_info in new_codes:
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                         console.print(f"[green]Added {added_count} new HS codes for {country} to database.[/green]")
                                     elif save_option == 2:
@@ -544,7 +541,7 @@ def run():
                                             for idx in selected_indices:
                                                 if 0 <= idx < len(new_codes):
                                                     code_info = new_codes[idx]
-                                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], 'DeepSeek'):
+                                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                         added_count += 1
                                             console.print(f"[green]Added {added_count} selected HS codes for {country} to database.[/green]")
                                         except Exception:
@@ -562,18 +559,20 @@ def run():
                         hs_code = typer.prompt("Enter HS Code")
                         description = typer.prompt("Enter description")
                         source = typer.prompt("Enter source (optional)", default="Manual")
-                        if country == "Global":
-                            success = save_global_hs_code(hs_code, description, source)
+                        if scope_choice == 1:
+                            success = save_asia_hs_code(hs_code, description, country)
                             if success:
-                                console.print(f"[green]HS Code {hs_code} - {description} added to global codes.[/green]")
+                                console.print(f"[green]HS Code {hs_code} - {description} added to Asia codes for {country}.[/green]")
                             else:
-                                console.print(f"[red]HS Code {hs_code} already exists in global codes.[/red]")
+                                console.print(f"[red]HS Code {hs_code} already exists in Asia codes for {country}.[/red]")
+                        elif scope_choice == 2:
+                            success = save_global_hs_code(hs_code, description, country)
+                            if success:
+                                console.print(f"[green]HS Code {hs_code} - {description} added to Global codes for {country}.[/green]")
+                            else:
+                                console.print(f"[red]HS Code {hs_code} already exists in Global codes for {country}.[/red]")
                         else:
-                            success = save_country_hs_code(country, hs_code, description, source)
-                            if success:
-                                console.print(f"[green]HS Code {hs_code} - {description} added for {country}.[/green]")
-                            else:
-                                console.print(f"[red]HS Code {hs_code} already exists for {country}.[/red]")
+                            console.print("[red]Invalid scope selection.[/red]")
                     else:
                         console.print("[red]Invalid option.[/red]")
                 elif crud_choice == 2:
@@ -951,7 +950,7 @@ def run():
                                 # Add all new codes
                                 added_count = 0
                                 for code_info in new_codes:
-                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
+                                    if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                         added_count += 1
                                 console.print(f"[green]Added {added_count} new HS codes for {country}.[/green]")
                                 
@@ -967,7 +966,7 @@ def run():
                                     for idx in selected_indices:
                                         if 0 <= idx < len(new_codes):
                                             code_info = new_codes[idx]
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
+                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                     console.print(f"[green]Added {added_count} selected HS codes for {country}.[/green]")
                                 except Exception:
@@ -985,7 +984,7 @@ def run():
                                         # Add new codes
                                         added_count = 0
                                         for code_info in new_codes:
-                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
+                                            if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                                 added_count += 1
                                         console.print(f"[green]Replaced existing codes with {added_count} new HS codes for {country}.[/green]")
                                     else:
@@ -994,7 +993,7 @@ def run():
                                     # No existing codes, just add new ones
                                     added_count = 0
                                     for code_info in new_codes:
-                                        if save_country_hs_code(country, code_info['hs_code'], code_info['description']):
+                                        if save_country_hs_code(country, code_info['hs_code'], code_info['description'], country, source="DeepSeek"):
                                             added_count += 1
                                     console.print(f"[green]Added {added_count} new HS codes for {country}.[/green]")
                                     

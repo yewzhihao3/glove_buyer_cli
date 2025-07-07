@@ -25,30 +25,73 @@ def init_db():
         )
     ''')
     
-    # Create country_hs_codes table for country-specific HS codes
+    # Create asia_hs_codes table
     c.execute('''
-        CREATE TABLE IF NOT EXISTS country_hs_codes (
+        CREATE TABLE IF NOT EXISTS asia_hs_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            country TEXT NOT NULL,
             hs_code TEXT NOT NULL,
             description TEXT NOT NULL,
-            source TEXT DEFAULT 'DeepSeek',
+            country TEXT NOT NULL,
+            source TEXT DEFAULT 'Manual',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(country, hs_code)
+            UNIQUE(hs_code, country)
         )
     ''')
     
-    # Create global_hs_codes table for global HS codes
+    # Create global_hs_codes table
     c.execute('''
         CREATE TABLE IF NOT EXISTS global_hs_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hs_code TEXT NOT NULL UNIQUE,
+            hs_code TEXT NOT NULL,
             description TEXT NOT NULL,
+            country TEXT NOT NULL,
             source TEXT DEFAULT 'Manual',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(hs_code, country)
         )
     ''')
     
+    # Create international_hs_codes table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS international_hs_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL
+        )
+    ''')
+    
+    # Create asia_buyer_leads table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS asia_buyer_leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT,
+            keyword TEXT,
+            company_name TEXT,
+            company_country TEXT,
+            company_website_link TEXT,
+            description TEXT,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(hs_code, keyword, company_name)
+        )
+    ''')
+
+    # Create global_buyer_leads table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS global_buyer_leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT,
+            keyword TEXT,
+            company_name TEXT,
+            company_country TEXT,
+            company_website_link TEXT,
+            description TEXT,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(hs_code, keyword, company_name)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -358,66 +401,78 @@ def get_duplicate_summary() -> List[Dict]:
         for row in duplicates
     ]
 
-# Global HS Code Functions
-def get_all_global_hs_codes() -> List[Dict]:
-    """
-    Get all global HS codes from the database.
-    Returns a list of dicts with all columns.
-    """
+# CRUD for asia_hs_codes
+def get_all_asia_hs_codes():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        SELECT id, hs_code, description, source, created_at 
-        FROM global_hs_codes 
-        ORDER BY created_at DESC
-    ''')
+    c.execute('SELECT id, hs_code, description, country, source, created_at FROM asia_hs_codes ORDER BY created_at DESC')
     rows = c.fetchall()
     conn.close()
-    columns = ['id', 'hs_code', 'description', 'source', 'created_at']
+    columns = ['id', 'hs_code', 'description', 'country', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows]
 
-def save_global_hs_code(hs_code: str, description: str, source: str = 'Manual') -> bool:
-    """
-    Save a global HS code to the database.
-    Returns True if successful, False if duplicate.
-    """
+def save_asia_hs_code(hs_code: str, description: str, country: str, source: str = 'Manual') -> bool:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        c.execute('''
-            INSERT INTO global_hs_codes (hs_code, description, source)
-            VALUES (?, ?, ?)
-        ''', (hs_code, description, source))
+        c.execute('INSERT INTO asia_hs_codes (hs_code, description, country, source) VALUES (?, ?, ?, ?)', (hs_code, description, country, source))
         conn.commit()
         success = True
     except sqlite3.IntegrityError:
-        # Duplicate entry
+        success = False
+    conn.close()
+    return success
+
+def update_asia_hs_code(hs_code_id: int, new_hs_code: str, new_description: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('UPDATE asia_hs_codes SET hs_code = ?, description = ? WHERE id = ?', (new_hs_code, new_description, hs_code_id))
+    conn.commit()
+    updated = c.rowcount > 0
+    conn.close()
+    return updated
+
+def delete_asia_hs_code(hs_code_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM asia_hs_codes WHERE id = ?', (hs_code_id,))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    return deleted
+
+# CRUD for global_hs_codes
+def get_all_global_hs_codes():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, hs_code, description, country, source, created_at FROM global_hs_codes ORDER BY created_at DESC')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'description', 'country', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def save_global_hs_code(hs_code: str, description: str, country: str, source: str = 'Manual') -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute('INSERT INTO global_hs_codes (hs_code, description, country, source) VALUES (?, ?, ?, ?)', (hs_code, description, country, source))
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
         success = False
     conn.close()
     return success
 
 def update_global_hs_code(hs_code_id: int, new_hs_code: str, new_description: str) -> bool:
-    """
-    Update an existing global HS code by ID.
-    Returns True if successful, False if not found.
-    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
-        UPDATE global_hs_codes 
-        SET hs_code = ?, description = ?
-        WHERE id = ?
-    ''', (new_hs_code, new_description, hs_code_id))
+    c.execute('UPDATE global_hs_codes SET hs_code = ?, description = ? WHERE id = ?', (new_hs_code, new_description, hs_code_id))
     conn.commit()
     updated = c.rowcount > 0
     conn.close()
     return updated
 
 def delete_global_hs_code(hs_code_id: int) -> bool:
-    """
-    Delete a global HS code by ID.
-    Returns True if successful, False if not found.
-    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('DELETE FROM global_hs_codes WHERE id = ?', (hs_code_id,))
@@ -425,25 +480,6 @@ def delete_global_hs_code(hs_code_id: int) -> bool:
     deleted = c.rowcount > 0
     conn.close()
     return deleted
-
-def get_global_hs_code_by_id(hs_code_id: int) -> Dict:
-    """
-    Get a global HS code by ID.
-    Returns a dict with the HS code data or None if not found.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        SELECT id, hs_code, description, source, created_at 
-        FROM global_hs_codes 
-        WHERE id = ?
-    ''', (hs_code_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        columns = ['id', 'hs_code', 'description', 'source', 'created_at']
-        return dict(zip(columns, row))
-    return None
 
 def init_international_hs_codes():
     """
@@ -485,3 +521,70 @@ def get_all_international_hs_codes():
     rows = c.fetchall()
     conn.close()
     return [{'hs_code': row[0], 'description': row[1]} for row in rows]
+
+def check_existing_buyer_leads(scope: str, hs_code: str, keyword: str) -> List[Dict]:
+    """
+    Check if we already have buyer leads for the given scope, HS code, and keyword combination.
+    Returns a list of existing company results if found, empty list if none.
+    """
+    table = {
+        'Asia': 'asia_buyer_leads',
+        'Global': 'global_buyer_leads',
+    }[scope]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f'''
+        SELECT company_name, company_country, company_website_link, description, source 
+        FROM {table} 
+        WHERE hs_code = ? AND keyword = ?
+        ORDER BY id DESC
+    ''', (hs_code, keyword))
+    rows = c.fetchall()
+    conn.close()
+    columns = ['company_name', 'company_country', 'company_website_link', 'description', 'source']
+    return [dict(zip(columns, row)) for row in rows]
+
+def insert_buyer_leads(scope: str, hs_code: str, keyword: str, companies: List[Dict]):
+    """
+    Insert a list of company dicts into the appropriate buyer leads table.
+    Each dict should have: company_name, company_country, company_website_link, description
+    """
+    table = {
+        'Asia': 'asia_buyer_leads',
+        'Global': 'global_buyer_leads',
+    }[scope]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    for company in companies:
+        c.execute(f'''
+            INSERT OR IGNORE INTO {table}
+            (hs_code, keyword, company_name, company_country, company_website_link, description, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            hs_code,
+            keyword,
+            company.get('company_name', ''),
+            company.get('company_country', ''),
+            company.get('company_website_link', ''),
+            company.get('description', ''),
+            'DeepSeek R1'
+        ))
+    conn.commit()
+    conn.close()
+
+def fetch_all_buyer_leads(scope: str) -> List[Dict]:
+    """
+    Fetch all buyer leads from the specified scope table, ordered by most recent (id DESC).
+    Returns a list of dicts with all columns.
+    """
+    table = {
+        'Asia': 'asia_buyer_leads',
+        'Global': 'global_buyer_leads',
+    }[scope]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f'SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at FROM {table} ORDER BY id DESC')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
