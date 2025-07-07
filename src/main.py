@@ -79,6 +79,135 @@ def load_country_list(path):
     with open(path, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
+def perform_buyer_search(country, selected_code, selected_desc):
+    """Helper function to perform the actual buyer search process"""
+    # Step 1: Keyword selection
+    keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
+    with open(keyword_file, 'r', encoding='utf-8') as f:
+        keyword_options = [line.strip() for line in f if line.strip()]
+    console.print("[bold]Select product keyword:[/bold]")
+    for kidx, keyword_option in enumerate(keyword_options, 1):
+        console.print(f"[cyan]{kidx}.[/cyan] {keyword_option.title()}")
+    console.print(f"[cyan]{len(keyword_options)+1}.[/cyan] [italic]Custom Keyword[/italic]")
+    console.print(f"[cyan]{len(keyword_options)+2}.[/cyan] Back to HS Code Selection")
+    keyword_choice = typer.prompt("Enter number to select keyword or custom", type=int)
+    
+    if keyword_choice == len(keyword_options)+2:
+        return False  # Back to HS Code Selection
+    
+    if 1 <= keyword_choice <= len(keyword_options):
+        keyword = keyword_options[keyword_choice-1]
+    elif keyword_choice == len(keyword_options)+1:
+        keyword = typer.prompt("Enter custom product keyword")
+    else:
+        console.print("[red]Invalid keyword selection.[/red]")
+        return False
+    
+    # Step 2: Check for existing buyer results first
+    existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
+    
+    if existing_buyers:
+        console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
+        for idx, buyer in enumerate(existing_buyers, 1):
+            console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
+        
+        console.print("\n[bold]Options:[/bold]")
+        console.print("[cyan]1.[/cyan] Use existing results")
+        console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
+        console.print("[cyan]3.[/cyan] Back to keyword selection")
+        
+        buyer_option = typer.prompt("Select option", type=int)
+        
+        if buyer_option == 1:
+            # Use existing results
+            console.print("[green]Using existing buyer results.[/green]")
+        elif buyer_option == 2:
+            # Query DeepSeek for new results (excluding existing companies)
+            existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
+            console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+            try:
+                with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                    task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                    progress.start_task(task)
+                    result = query_deepseek(selected_code, keyword, country, existing_company_names)
+                console.print("[bold green]DeepSeek Results:[/bold green]")
+                console.print(result)
+                # Save to DB
+                companies = parse_deepseek_output(result)
+                console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+                insert_results(selected_code, keyword, country, companies)
+                console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+        elif buyer_option == 3:
+            return False  # Back to keyword selection
+        else:
+            console.print("[red]Invalid option.[/red]")
+            return False
+    else:
+        # No existing results, query DeepSeek
+        console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
+        try:
+            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+                task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
+                progress.start_task(task)
+                result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
+            console.print("[bold green]DeepSeek Results:[/bold green]")
+            console.print(result)
+            # Save to DB
+            companies = parse_deepseek_output(result)
+            console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
+            insert_results(selected_code, keyword, country, companies)
+            console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return False
+    
+    return True  # Search completed successfully
+
+def select_country_and_scope():
+    """Helper function to select country and scope"""
+    # Step 1: Select scope (Asia/Global)
+    console.print("[bold]Choose search scope:[/bold]")
+    console.print("[cyan]1.[/cyan] Asia")
+    console.print("[cyan]2.[/cyan] Global")
+    console.print("[cyan]3.[/cyan] Back to Main Menu")
+    scope = typer.prompt("Enter number for scope", type=int)
+    
+    if scope == 3:
+        return None, None
+    
+    if scope == 1:
+        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+        scope_name = "Asia"
+    elif scope == 2:
+        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+        scope_name = "Global"
+    else:
+        console.print("[red]Invalid scope selection.[/red]")
+        return None, None
+    
+    # Step 2: Country selection
+    console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
+    for idx, country in enumerate(country_list, 1):
+        console.print(f"[cyan]{idx}.[/cyan] {country}")
+    console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Enter a custom country[/italic]")
+    console.print(f"[cyan]{len(country_list)+2}.[/cyan] Back to Scope Selection")
+    country_idx = typer.prompt("Enter number to select country or custom", type=int)
+    
+    if country_idx == len(country_list)+2:
+        return None, None
+    
+    if 1 <= country_idx <= len(country_list):
+        country = country_list[country_idx-1]
+    elif country_idx == len(country_list)+1:
+        country = typer.prompt("Enter custom country name")
+    else:
+        console.print("[red]Invalid country selection.[/red]")
+        return None, None
+    
+    return country, scope_name
+
 @app.command()
 def run():
     init_db()
@@ -86,43 +215,38 @@ def run():
         choice = main_menu()
         if choice == 1:
             # Start the buyer search flow
+            last_country = None  # Track the last country used
+            
             while True:
-                # Step 1: Select scope (Asia/Global)
-                console.print("[bold]Choose search scope:[/bold]")
-                console.print("[cyan]1.[/cyan] Asia")
-                console.print("[cyan]2.[/cyan] Global")
-                console.print("[cyan]3.[/cyan] Back to Main Menu")
-                scope = typer.prompt("Enter number for scope", type=int)
-                
-                if scope == 3:
-                    break
-                if scope == 1:
-                    country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
-                    scope_name = "Asia"
-                elif scope == 2:
-                    country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
-                    scope_name = "Global"
+                # Determine if we should use the last country or select a new one
+                if last_country:
+                    console.print(f"[bold]Do you want to continue with the previous country ({last_country})?[/bold]")
+                    console.print("[cyan]1.[/cyan] Yes, use the same country")
+                    console.print("[cyan]2.[/cyan] No, select a different country")
+                    console.print("[cyan]3.[/cyan] Back to Main Menu")
+                    use_same_country = typer.prompt("Select option", type=int)
+                    
+                    if use_same_country == 3:
+                        break
+                    elif use_same_country == 1:
+                        country = last_country
+                    elif use_same_country == 2:
+                        # Select new country and scope
+                        result = select_country_and_scope()
+                        if result[0] is None:
+                            break
+                        country, scope_name = result
+                        last_country = country
+                    else:
+                        console.print("[red]Invalid option.[/red]")
+                        continue
                 else:
-                    console.print("[red]Invalid scope selection.[/red]")
-                    continue
-                
-                # Step 2: Country selection
-                console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
-                for idx, country in enumerate(country_list, 1):
-                    console.print(f"[cyan]{idx}.[/cyan] {country}")
-                console.print(f"[cyan]{len(country_list)+1}.[/cyan] [italic]Enter a custom country[/italic]")
-                console.print(f"[cyan]{len(country_list)+2}.[/cyan] Back to Scope Selection")
-                country_idx = typer.prompt("Enter number to select country or custom", type=int)
-                
-                if country_idx == len(country_list)+2:
-                    continue
-                if 1 <= country_idx <= len(country_list):
-                    country = country_list[country_idx-1]
-                elif country_idx == len(country_list)+1:
-                    country = typer.prompt("Enter custom country name")
-                else:
-                    console.print("[red]Invalid country selection.[/red]")
-                    continue
+                    # First time - select country and scope
+                    result = select_country_and_scope()
+                    if result[0] is None:
+                        break
+                    country, scope_name = result
+                    last_country = country
                 
                 # Step 3: Check for existing country-specific HS codes
                 existing_codes = get_country_hs_codes(country)
@@ -234,95 +358,15 @@ def run():
                             selected_code, selected_desc = codes[idx-1]
                             console.print(f"[green]Selected HS Code:[/green] [bold]{selected_code}[/bold] - {selected_desc}")
                             
-                            # Proceed to keyword selection and buyer search
-                            keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
-                            with open(keyword_file, 'r', encoding='utf-8') as f:
-                                keyword_options = [line.strip() for line in f if line.strip()]
-                            console.print("[bold]Select product keyword:[/bold]")
-                            for kidx, keyword_option in enumerate(keyword_options, 1):
-                                console.print(f"[cyan]{kidx}.[/cyan] {keyword_option.title()}")
-                            console.print(f"[cyan]{len(keyword_options)+1}.[/cyan] [italic]Custom Keyword[/italic]")
-                            console.print(f"[cyan]{len(keyword_options)+2}.[/cyan] Back to HS Code Selection")
-                            keyword_choice = typer.prompt("Enter number to select keyword or custom", type=int)
-                            
-                            if keyword_choice == len(keyword_options)+2:
-                                continue
-                            if 1 <= keyword_choice <= len(keyword_options):
-                                keyword = keyword_options[keyword_choice-1]
-                            elif keyword_choice == len(keyword_options)+1:
-                                keyword = typer.prompt("Enter custom product keyword")
-                            else:
-                                console.print("[red]Invalid keyword selection.[/red]")
-                                continue
-                            
-                            # Check for existing buyer results first
-                            existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
-                            
-                            if existing_buyers:
-                                console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
-                                for idx, buyer in enumerate(existing_buyers, 1):
-                                    console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
-                                
-                                console.print("\n[bold]Options:[/bold]")
-                                console.print("[cyan]1.[/cyan] Use existing results")
-                                console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
-                                console.print("[cyan]3.[/cyan] Back to keyword selection")
-                                
-                                buyer_option = typer.prompt("Select option", type=int)
-                                
-                                if buyer_option == 1:
-                                    # Use existing results
-                                    console.print("[green]Using existing buyer results.[/green]")
-                                elif buyer_option == 2:
-                                    # Query DeepSeek for new results (excluding existing companies)
-                                    existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
-                                    console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                                    try:
-                                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                                            task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                                            progress.start_task(task)
-                                            result = query_deepseek(selected_code, keyword, country, existing_company_names)
-                                        console.print("[bold green]DeepSeek Results:[/bold green]")
-                                        console.print(result)
-                                        # Save to DB
-                                        companies = parse_deepseek_output(result)
-                                        console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                                        insert_results(selected_code, keyword, country, companies)
-                                        console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                                    except Exception as e:
-                                        console.print(f"[red]Error: {e}[/red]")
-                                elif buyer_option == 3:
-                                    continue
-                                else:
-                                    console.print("[red]Invalid option.[/red]")
-                                continue
-                            else:
-                                # No existing results, query DeepSeek
-                                console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                                try:
-                                    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                                        task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                                        progress.start_task(task)
-                                        result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
-                                    console.print("[bold green]DeepSeek Results:[/bold green]")
-                                    console.print(result)
-                                    # Save to DB
-                                    companies = parse_deepseek_output(result)
-                                    console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                                    insert_results(selected_code, keyword, country, companies)
-                                    console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                                except Exception as e:
-                                    console.print(f"[red]Error: {e}[/red]")
-                            
-                            # Ask if user wants to continue
-                            console.print("[bold]Do you want to continue with another buyer search?[/bold]")
-                            console.print("[cyan]1.[/cyan] Yes, continue with another search")
-                            console.print("[cyan]2.[/cyan] No, back to main menu")
-                            continue_search_choice = typer.prompt("Select option", type=int)
-                            if continue_search_choice == 2:
-                                break
-                            else:
-                                continue
+                            # Perform buyer search
+                            if perform_buyer_search(country, selected_code, selected_desc):
+                                # Ask if user wants to continue
+                                console.print("[bold]Do you want to continue with another buyer search?[/bold]")
+                                console.print("[cyan]1.[/cyan] Yes, continue with another search")
+                                console.print("[cyan]2.[/cyan] No, back to main menu")
+                                continue_search_choice = typer.prompt("Select option", type=int)
+                                if continue_search_choice == 2:
+                                    break
                         else:
                             console.print("[red]Invalid selection.[/red]")
                             continue
@@ -361,93 +405,15 @@ def run():
                     # No codes available, break the loop
                     break
                 
-                # Step 6: Keyword selection
-                keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
-                with open(keyword_file, 'r', encoding='utf-8') as f:
-                    keyword_options = [line.strip() for line in f if line.strip()]
-                console.print("[bold]Select product keyword:[/bold]")
-                for kidx, keyword_option in enumerate(keyword_options, 1):
-                    console.print(f"[cyan]{kidx}.[/cyan] {keyword_option.title()}")
-                console.print(f"[cyan]{len(keyword_options)+1}.[/cyan] [italic]Custom Keyword[/italic]")
-                console.print(f"[cyan]{len(keyword_options)+2}.[/cyan] Back to HS Code Selection")
-                keyword_choice = typer.prompt("Enter number to select keyword or custom", type=int)
-                
-                if keyword_choice == len(keyword_options)+2:
-                    continue
-                if 1 <= keyword_choice <= len(keyword_options):
-                    keyword = keyword_options[keyword_choice-1]
-                elif keyword_choice == len(keyword_options)+1:
-                    keyword = typer.prompt("Enter custom product keyword")
-                else:
-                    console.print("[red]Invalid keyword selection.[/red]")
-                    continue
-                
-                # Step 7: Check for existing buyer results first
-                existing_buyers = check_existing_buyer_results(selected_code, keyword, country)
-                
-                if existing_buyers:
-                    console.print(f"[green]Found {len(existing_buyers)} existing buyer results for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}':[/green]")
-                    for idx, buyer in enumerate(existing_buyers, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {buyer['company_name']} - {buyer['company_country']}")
-                    
-                    console.print("\n[bold]Options:[/bold]")
-                    console.print("[cyan]1.[/cyan] Use existing results")
-                    console.print("[cyan]2.[/cyan] Query DeepSeek for new results")
-                    console.print("[cyan]3.[/cyan] Back to keyword selection")
-                    
-                    buyer_option = typer.prompt("Select option", type=int)
-                    
-                    if buyer_option == 1:
-                        # Use existing results
-                        console.print("[green]Using existing buyer results.[/green]")
-                    elif buyer_option == 2:
-                        # Query DeepSeek for new results (excluding existing companies)
-                        existing_company_names = [buyer['company_name'] for buyer in existing_buyers]
-                        console.print(f"[yellow]Searching for NEW buyers (excluding {len(existing_company_names)} existing companies) for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                        try:
-                            with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                                task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                                progress.start_task(task)
-                                result = query_deepseek(selected_code, keyword, country, existing_company_names)
-                            console.print("[bold green]DeepSeek Results:[/bold green]")
-                            console.print(result)
-                            # Save to DB
-                            companies = parse_deepseek_output(result)
-                            console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                            insert_results(selected_code, keyword, country, companies)
-                            console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                        except Exception as e:
-                            console.print(f"[red]Error: {e}[/red]")
-                    elif buyer_option == 3:
-                        continue
-                    else:
-                        console.print("[red]Invalid option.[/red]")
-                    continue
-                else:
-                    # No existing results, query DeepSeek
-                    console.print(f"[yellow]Searching buyers for HS Code {selected_code} ({selected_desc}) in {country} with keyword '{keyword}'...[/yellow]")
-                    try:
-                        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-                            task = progress.add_task("[yellow]Contacting DeepSeek...", start=False)
-                            progress.start_task(task)
-                            result = query_deepseek(selected_code, keyword, country, [])  # Empty list for no existing companies
-                        console.print("[bold green]DeepSeek Results:[/bold green]")
-                        console.print(result)
-                        # Save to DB
-                        companies = parse_deepseek_output(result)
-                        console.print(f"[yellow]DEBUG: Parsed companies: {companies}[/yellow]")
-                        insert_results(selected_code, keyword, country, companies)
-                        console.print(f"[green]{len(companies)} companies saved to database (duplicates skipped).[/green]")
-                    except Exception as e:
-                        console.print(f"[red]Error: {e}[/red]")
-                
-                # Step 8: Ask if user wants to continue
-                console.print("[bold]Do you want to continue with another buyer search?[/bold]")
-                console.print("[cyan]1.[/cyan] Yes, continue with another search")
-                console.print("[cyan]2.[/cyan] No, back to main menu")
-                continue_search_choice = typer.prompt("Select option", type=int)
-                if continue_search_choice == 2:
-                    break
+                # Step 6: Perform buyer search
+                if perform_buyer_search(country, selected_code, selected_desc):
+                    # Ask if user wants to continue
+                    console.print("[bold]Do you want to continue with another buyer search?[/bold]")
+                    console.print("[cyan]1.[/cyan] Yes, continue with another search")
+                    console.print("[cyan]2.[/cyan] No, back to main menu")
+                    continue_search_choice = typer.prompt("Select option", type=int)
+                    if continue_search_choice == 2:
+                        break
         elif choice == 2:
             while True:
                 crud_choice = hs_code_crud_menu()
