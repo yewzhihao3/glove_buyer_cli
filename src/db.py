@@ -629,3 +629,21 @@ def fetch_all_buyer_leads(scope: str) -> List[Dict]:
     rows = c.fetchall()
     conn.close()
     return [dict(zip(columns, row)) for row in rows]
+
+def get_all_asia_buyer_leads() -> List[Dict]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at FROM asia_buyer_leads ORDER BY id DESC')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def get_all_global_buyer_leads() -> List[Dict]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at FROM global_buyer_leads ORDER BY id DESC')
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]

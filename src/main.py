@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_all_asia_hs_codes, save_asia_hs_code, update_asia_hs_code, delete_asia_hs_code, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, init_international_hs_codes, get_all_international_hs_codes, check_existing_buyer_leads, insert_buyer_leads
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_all_asia_hs_codes, save_asia_hs_code, update_asia_hs_code, delete_asia_hs_code, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, init_international_hs_codes, get_all_international_hs_codes, check_existing_buyer_leads, insert_buyer_leads, get_all_asia_buyer_leads, get_all_global_buyer_leads
 import pandas as pd
 import datetime
 import csv
@@ -722,21 +722,21 @@ def run():
                         console.print("[red]Invalid input: please enter number(s) separated by commas (e.g. 1,2,3).[/red]")
                         continue
 
-                    to_delete = [codes[idx] for idx in selected_indices if 0 <= idx < len(codes)]
-                    if not to_delete:
-                        console.print("[red]No valid codes selected for deletion.[/red]")
-                        continue
+                        to_delete = [codes[idx] for idx in selected_indices if 0 <= idx < len(codes)]
+                        if not to_delete:
+                            console.print("[red]No valid codes selected for deletion.[/red]")
+                            continue
 
-                    confirm = typer.confirm(f"Are you sure you want to delete {len(to_delete)} HS code(s) for {country}?", default=False)
-                    if confirm:
-                        deleted_count = 0
-                        for code_info in to_delete:
-                            success = delete_asia_hs_code(code_info['id'])
-                            if success:
-                                deleted_count += 1
-                        console.print(f"[green]{deleted_count} HS code(s) deleted for {country}.[/green]")
-                    else:
-                        console.print("[yellow]Delete cancelled.[/yellow]")
+                        confirm = typer.confirm(f"Are you sure you want to delete {len(to_delete)} HS code(s) for {country}?", default=False)
+                        if confirm:
+                            deleted_count = 0
+                            for code_info in to_delete:
+                                success = delete_asia_hs_code(code_info['id'])
+                                if success:
+                                    deleted_count += 1
+                            console.print(f"[green]{deleted_count} HS code(s) deleted for {country}.[/green]")
+                        else:
+                            console.print("[yellow]Delete cancelled.[/yellow]")
                 elif crud_choice == 4:
                     while True:
                         console.print("[bold]View HS Codes Menu[/bold]")
@@ -813,12 +813,8 @@ def run():
                                         for idx, row in enumerate(filtered, 1):
                                             table.add_row(str(idx), row['hs_code'], row['description'], row.get('source', '-'), row.get('created_at', '-'))
                                         console.print(table)
-                                    else:
-                                        console.print("[red]Invalid selection.[/red]")
                                 elif asia_view_choice == 3:
                                     break
-                                else:
-                                    console.print("[red]Invalid option.[/red]")
                         elif view_choice == 3:
                             # Global HS Codes
                             while True:
@@ -862,12 +858,10 @@ def run():
                                         for idx, row in enumerate(filtered, 1):
                                             table.add_row(str(idx), row['hs_code'], row['description'], row.get('source', '-'), row.get('created_at', '-'))
                                         console.print(table)
-                                    else:
-                                        console.print("[red]Invalid selection.[/red]")
                                 elif global_view_choice == 3:
                                     break
-                                else:
-                                    console.print("[red]Invalid option.[/red]")
+                            else:
+                                console.print("[red]Invalid option.[/red]")
                         elif view_choice == 4:
                             # International HS Codes
                             intl_codes = get_all_international_hs_codes()
@@ -893,108 +887,417 @@ def run():
             while True:
                 crud_choice = buyer_history_crud_menu()
                 if crud_choice == 1:
-                    results = fetch_all_results()
-                    if not results:
-                        console.print("[red]No past buyer search results found.[/red]")
-                    else:
-                        table = Table(title="Buyer Search History", show_lines=True)
-                        table.add_column("No.", style="cyan", justify="right")
-                        table.add_column("HS Code", style="magenta")
-                        table.add_column("Keyword", style="yellow")
-                        table.add_column("Country", style="green")
-                        table.add_column("Company Name", style="bold")
-                        table.add_column("Company Country", style="blue")
-                        table.add_column("Website", style="underline")
-                        table.add_column("Description", style="dim", overflow="fold")
-                        for idx, row in enumerate(results, 1):
-                            table.add_row(
-                                str(idx),
-                                row['hs_code'],
-                                row['keyword'],
-                                row['country'],
-                                row['company_name'],
-                                row['company_country'],
-                                row['company_website_link'],
-                                (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
-                            )
-                        console.print(table)
-                elif crud_choice == 2:
-                    results = fetch_all_results()
-                    if not results:
-                        console.print("[red]No records to edit.[/red]")
-                        continue
-                    for idx, row in enumerate(results, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row['country']})")
-                    idx = typer.prompt("Enter number to edit", type=int)
-                    if 1 <= idx <= len(results):
-                        record = results[idx-1]
-                        fields = ['hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description']
-                        field_names = [f.replace('_', ' ').title() for f in fields]
-                        console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
-                        console.print("[cyan]1.[/cyan] Single Field")
-                        console.print("[cyan]2.[/cyan] Multiple Fields")
-                        mode = typer.prompt("Enter 1 or 2", type=int)
-                        updated_fields = {}
-                        if mode == 1:
-                            for i, name in enumerate(field_names, 1):
-                                console.print(f"[cyan]{i}.[/cyan] {name}")
-                            field_idx = typer.prompt("Select field number to edit", type=int)
-                            if 1 <= field_idx <= len(fields):
-                                field = fields[field_idx-1]
-                                new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
-                                if new_val != record[field]:
-                                    updated_fields[field] = new_val
+                    # New Buyer List Viewing Flow
+                    while True:
+                        console.print("[bold]View Potential Buyers Menu[/bold]")
+                        console.print("[cyan]1.[/cyan] View All Potential Buyers (all scopes)")
+                        console.print("[cyan]2.[/cyan] View Asia Potential Buyers")
+                        console.print("[cyan]3.[/cyan] View Global Potential Buyers")
+                        console.print("[cyan]4.[/cyan] Back")
+                        view_choice = typer.prompt("Select an option", type=int)
+                        if view_choice == 1:
+                            results = fetch_all_results()
+                            if not results:
+                                console.print("[red]No past buyer search results found.[/red]")
                             else:
-                                console.print("[red]Invalid field selection.[/red]")
-                        elif mode == 2:
-                            for i, name in enumerate(field_names, 1):
-                                console.print(f"[cyan]{i}.[/cyan] {name}")
-                            field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3,5)")
-                            try:
-                                selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
-                                for field_idx in selected:
-                                    if 1 <= field_idx <= len(fields):
-                                        field = fields[field_idx-1]
-                                        new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
-                                        if new_val != record[field]:
-                                            updated_fields[field] = new_val
+                                table = Table(title="Buyer Search History (All)", show_lines=True)
+                                table.add_column("No.", style="cyan", justify="right")
+                                table.add_column("HS Code", style="magenta")
+                                table.add_column("Keyword", style="yellow")
+                                table.add_column("Country", style="green")
+                                table.add_column("Company Name", style="bold")
+                                table.add_column("Company Country", style="blue")
+                                table.add_column("Website", style="underline")
+                                table.add_column("Description", style="dim", overflow="fold")
+                                for idx, row in enumerate(results, 1):
+                                    table.add_row(
+                                        str(idx),
+                                        row['hs_code'],
+                                        row['keyword'],
+                                        row['country'],
+                                        row['company_name'],
+                                        row['company_country'],
+                                        row['company_website_link'],
+                                        (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                                    )
+                                console.print(table)
+                        elif view_choice == 2:
+                            # Asia Potential Buyers
+                            from db import get_all_asia_buyer_leads
+                            while True:
+                                console.print("[bold]View Asia Potential Buyers[/bold]")
+                                console.print("[cyan]1.[/cyan] View all Asia buyers")
+                                console.print("[cyan]2.[/cyan] View buyers for a specific country")
+                                console.print("[cyan]3.[/cyan] Back")
+                                asia_view_choice = typer.prompt("Select an option", type=int)
+                                asia_buyers = get_all_asia_buyer_leads()
+                                if asia_view_choice == 1:
+                                    table = Table(title="Asia Potential Buyers", show_lines=True)
+                                    table.add_column("No.", style="cyan", justify="right")
+                                    table.add_column("HS Code", style="magenta")
+                                    table.add_column("Keyword", style="yellow")
+                                    table.add_column("Country", style="green")
+                                    table.add_column("Company Name", style="bold")
+                                    table.add_column("Company Country", style="blue")
+                                    table.add_column("Website", style="underline")
+                                    table.add_column("Description", style="dim", overflow="fold")
+                                    for idx, row in enumerate(asia_buyers, 1):
+                                        table.add_row(
+                                            str(idx),
+                                            row['hs_code'],
+                                            row['keyword'],
+                                            row['company_country'],
+                                            row['company_name'],
+                                            row['company_country'],
+                                            row['company_website_link'],
+                                            (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                                        )
+                                    console.print(table)
+                                elif asia_view_choice == 2:
+                                    countries = sorted(set(row['company_country'] for row in asia_buyers))
+                                    if not countries:
+                                        console.print("[red]No Asia buyer leads available.[/red]")
+                                        continue
+                                    for idx, country in enumerate(countries, 1):
+                                        console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                    console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                    cidx = typer.prompt("Select a country", type=int)
+                                    if cidx == len(countries)+1:
+                                        continue
+                                    if 1 <= cidx <= len(countries):
+                                        country = countries[cidx-1]
+                                        filtered = [row for row in asia_buyers if row['company_country'] == country]
+                                        table = Table(title=f"Asia Potential Buyers for {country}", show_lines=True)
+                                        table.add_column("No.", style="cyan", justify="right")
+                                        table.add_column("HS Code", style="magenta")
+                                        table.add_column("Keyword", style="yellow")
+                                        table.add_column("Company Name", style="bold")
+                                        table.add_column("Company Country", style="blue")
+                                        table.add_column("Website", style="underline")
+                                        table.add_column("Description", style="dim", overflow="fold")
+                                        for idx, row in enumerate(filtered, 1):
+                                            table.add_row(
+                                                str(idx),
+                                                row['hs_code'],
+                                                row['keyword'],
+                                                row['company_name'],
+                                                row['company_country'],
+                                                row['company_website_link'],
+                                                (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                                            )
+                                        console.print(table)
                                     else:
-                                        console.print(f"[red]Invalid field number: {field_idx}[/red]")
-                            except Exception:
-                                console.print("[red]Invalid input format.[/red]")
+                                        console.print("[red]Invalid selection.[/red]")
+                                elif asia_view_choice == 3:
+                                    break
+                                else:
+                                    console.print("[red]Invalid option.[/red]")
+                        elif view_choice == 3:
+                            # Global Potential Buyers
+                            from db import get_all_global_buyer_leads
+                            while True:
+                                console.print("[bold]View Global Potential Buyers[/bold]")
+                                console.print("[cyan]1.[/cyan] View all Global buyers")
+                                console.print("[cyan]2.[/cyan] View buyers for a specific country")
+                                console.print("[cyan]3.[/cyan] Back")
+                                global_view_choice = typer.prompt("Select an option", type=int)
+                                global_buyers = get_all_global_buyer_leads()
+                                if global_view_choice == 1:
+                                    table = Table(title="Global Potential Buyers", show_lines=True)
+                                    table.add_column("No.", style="cyan", justify="right")
+                                    table.add_column("HS Code", style="magenta")
+                                    table.add_column("Keyword", style="yellow")
+                                    table.add_column("Country", style="green")
+                                    table.add_column("Company Name", style="bold")
+                                    table.add_column("Company Country", style="blue")
+                                    table.add_column("Website", style="underline")
+                                    table.add_column("Description", style="dim", overflow="fold")
+                                    for idx, row in enumerate(global_buyers, 1):
+                                        table.add_row(
+                                            str(idx),
+                                            row['hs_code'],
+                                            row['keyword'],
+                                            row['company_country'],
+                                            row['company_name'],
+                                            row['company_country'],
+                                            row['company_website_link'],
+                                            (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                                        )
+                                    console.print(table)
+                                elif global_view_choice == 2:
+                                    countries = sorted(set(row['company_country'] for row in global_buyers))
+                                    if not countries:
+                                        console.print("[red]No Global buyer leads available.[/red]")
+                                        continue
+                                    for idx, country in enumerate(countries, 1):
+                                        console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                    console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                    cidx = typer.prompt("Select a country", type=int)
+                                    if cidx == len(countries)+1:
+                                        continue
+                                    if 1 <= cidx <= len(countries):
+                                        country = countries[cidx-1]
+                                        filtered = [row for row in global_buyers if row['company_country'] == country]
+                                        table = Table(title=f"Global Potential Buyers for {country}", show_lines=True)
+                                        table.add_column("No.", style="cyan", justify="right")
+                                        table.add_column("HS Code", style="magenta")
+                                        table.add_column("Keyword", style="yellow")
+                                        table.add_column("Company Name", style="bold")
+                                        table.add_column("Company Country", style="blue")
+                                        table.add_column("Website", style="underline")
+                                        table.add_column("Description", style="dim", overflow="fold")
+                                        for idx, row in enumerate(filtered, 1):
+                                            table.add_row(
+                                                str(idx),
+                                                row['hs_code'],
+                                                row['keyword'],
+                                                row['company_name'],
+                                                row['company_country'],
+                                                row['company_website_link'],
+                                                (row['description'][:60] + '...') if row['description'] and len(row['description']) > 60 else (row['description'] or "")
+                                            )
+                                        console.print(table)
+                                    else:
+                                        console.print("[red]Invalid selection.[/red]")
+                                elif global_view_choice == 3:
+                                    break
+                                else:
+                                    console.print("[red]Invalid option.[/red]")
+                        elif view_choice == 4:
+                            break
+                        else:
+                            console.print("[red]Invalid option.[/red]")
+                elif crud_choice == 2:
+                    while True:
+                        console.print("[bold]Edit Buyer Record Menu[/bold]")
+                        console.print("[cyan]1.[/cyan] Edit Any Buyer Record (all scopes)")
+                        console.print("[cyan]2.[/cyan] Edit Asia Buyer Record")
+                        console.print("[cyan]3.[/cyan] Edit Global Buyer Record")
+                        console.print("[cyan]4.[/cyan] Back")
+                        edit_choice = typer.prompt("Select an option", type=int)
+                        if edit_choice == 1:
+                            results = fetch_all_results()
+                        elif edit_choice == 2:
+                            from db import get_all_asia_buyer_leads
+                            asia_buyers = get_all_asia_buyer_leads()
+                            console.print("[bold]Edit Asia Buyer Record[/bold]")
+                            console.print("[cyan]1.[/cyan] Edit any Asia buyer")
+                            console.print("[cyan]2.[/cyan] Edit by specific country")
+                            console.print("[cyan]3.[/cyan] Back")
+                            asia_edit_choice = typer.prompt("Select an option", type=int)
+                            if asia_edit_choice == 1:
+                                results = asia_buyers
+                            elif asia_edit_choice == 2:
+                                countries = sorted(set(row['company_country'] for row in asia_buyers))
+                                if not countries:
+                                    console.print("[red]No Asia buyer leads available.[/red]")
+                                    continue
+                                for idx, country in enumerate(countries, 1):
+                                    console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                cidx = typer.prompt("Select a country", type=int)
+                                if cidx == len(countries)+1:
+                                    continue
+                                if 1 <= cidx <= len(countries):
+                                    country = countries[cidx-1]
+                                    results = [row for row in asia_buyers if row['company_country'] == country]
+                                else:
+                                    console.print("[red]Invalid selection.[/red]")
+                                    continue
+                            elif asia_edit_choice == 3:
+                                continue
+                            else:
+                                console.print("[red]Invalid option.[/red]")
+                                continue
+                        elif edit_choice == 3:
+                            from db import get_all_global_buyer_leads
+                            global_buyers = get_all_global_buyer_leads()
+                            console.print("[bold]Edit Global Buyer Record[/bold]")
+                            console.print("[cyan]1.[/cyan] Edit any Global buyer")
+                            console.print("[cyan]2.[/cyan] Edit by specific country")
+                            console.print("[cyan]3.[/cyan] Back")
+                            global_edit_choice = typer.prompt("Select an option", type=int)
+                            if global_edit_choice == 1:
+                                results = global_buyers
+                            elif global_edit_choice == 2:
+                                countries = sorted(set(row['company_country'] for row in global_buyers))
+                                if not countries:
+                                    console.print("[red]No Global buyer leads available.[/red]")
+                                    continue
+                                for idx, country in enumerate(countries, 1):
+                                    console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                cidx = typer.prompt("Select a country", type=int)
+                                if cidx == len(countries)+1:
+                                    continue
+                                if 1 <= cidx <= len(countries):
+                                    country = countries[cidx-1]
+                                    results = [row for row in global_buyers if row['company_country'] == country]
+                                else:
+                                    console.print("[red]Invalid selection.[/red]")
+                                    continue
+                            elif global_edit_choice == 3:
+                                continue
+                            else:
+                                console.print("[red]Invalid option.[/red]")
+                                continue
+                        elif edit_choice == 4:
+                            break
+                        else:
+                            console.print("[red]Invalid option.[/red]")
+                            continue
+                        if not results:
+                            console.print("[red]No records to edit.[/red]")
+                            continue
+                        for idx, row in enumerate(results, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row.get('company_country', row.get('country', ''))})")
+                        idx = typer.prompt("Enter number to edit", type=int)
+                        if 1 <= idx <= len(results):
+                            record = results[idx-1]
+                            fields = ['hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description']
+                            field_names = [f.replace('_', ' ').title() for f in fields]
+                            console.print("[bold]Do you want to edit a single field or multiple fields?[/bold]")
+                            console.print("[cyan]1.[/cyan] Single Field")
+                            console.print("[cyan]2.[/cyan] Multiple Fields")
+                            mode = typer.prompt("Enter 1 or 2", type=int)
+                            updated_fields = {}
+                            if mode == 1:
+                                for i, name in enumerate(field_names, 1):
+                                    console.print(f"[cyan]{i}.[/cyan] {name}")
+                                field_idx = typer.prompt("Select field number to edit", type=int)
+                                if 1 <= field_idx <= len(fields):
+                                    field = fields[field_idx-1]
+                                    new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
+                                    if new_val != record[field]:
+                                        updated_fields[field] = new_val
+                                else:
+                                    console.print("[red]Invalid field selection.[/red]")
+                            elif mode == 2:
+                                for i, name in enumerate(field_names, 1):
+                                    console.print(f"[cyan]{i}.[/cyan] {name}")
+                                field_idxs = typer.prompt("Enter field numbers to edit (comma-separated, e.g. 1,3,5)")
+                                try:
+                                    selected = [int(x.strip()) for x in field_idxs.split(',') if x.strip().isdigit()]
+                                    for field_idx in selected:
+                                        if 1 <= field_idx <= len(fields):
+                                            field = fields[field_idx-1]
+                                            new_val = typer.prompt(f"Enter new {field_names[field_idx-1]}", default=record[field])
+                                            if new_val != record[field]:
+                                                updated_fields[field] = new_val
+                                        else:
+                                            console.print(f"[red]Invalid field number: {field_idx}[/red]")
+                                except Exception:
+                                    console.print("[red]Invalid input format.[/red]")
+                            else:
+                                console.print("[red]Invalid selection.[/red]")
+                            if updated_fields:
+                                success = update_result(record['id'], updated_fields)
+                                if success:
+                                    console.print("[green]Record updated successfully![/green]")
+                                else:
+                                    console.print("[red]Failed to update record.[/red]")
+                            else:
+                                console.print("[yellow]No changes made.[/yellow]")
                         else:
                             console.print("[red]Invalid selection.[/red]")
-                        if updated_fields:
-                            success = update_result(record['id'], updated_fields)
-                            if success:
-                                console.print("[green]Record updated successfully![/green]")
-                            else:
-                                console.print("[red]Failed to update record.[/red]")
-                        else:
-                            console.print("[yellow]No changes made.[/yellow]")
-                    else:
-                        console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 3:
-                    results = fetch_all_results()
-                    if not results:
-                        console.print("[red]No records to delete.[/red]")
-                        continue
-                    for idx, row in enumerate(results, 1):
-                        console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row['country']})")
-                    idx = typer.prompt("Enter number to delete", type=int)
-                    if 1 <= idx <= len(results):
-                        record = results[idx-1]
-                        confirm = typer.confirm(f"Are you sure you want to delete {record['company_name']} ({record['hs_code']}, {record['keyword']}, {record['country']})?", default=False)
-                        if confirm:
-                            success = delete_result(record['id'])
-                            if success:
-                                console.print("[green]Record deleted successfully![/green]")
+                    while True:
+                        console.print("[bold]Delete Buyer Record Menu[/bold]")
+                        console.print("[cyan]1.[/cyan] Delete Any Buyer Record (all scopes)")
+                        console.print("[cyan]2.[/cyan] Delete Asia Buyer Record")
+                        console.print("[cyan]3.[/cyan] Delete Global Buyer Record")
+                        console.print("[cyan]4.[/cyan] Back")
+                        del_choice = typer.prompt("Select an option", type=int)
+                        if del_choice == 1:
+                            results = fetch_all_results()
+                        elif del_choice == 2:
+                            from db import get_all_asia_buyer_leads
+                            asia_buyers = get_all_asia_buyer_leads()
+                            console.print("[bold]Delete Asia Buyer Record[/bold]")
+                            console.print("[cyan]1.[/cyan] Delete any Asia buyer")
+                            console.print("[cyan]2.[/cyan] Delete by specific country")
+                            console.print("[cyan]3.[/cyan] Back")
+                            asia_del_choice = typer.prompt("Select an option", type=int)
+                            if asia_del_choice == 1:
+                                results = asia_buyers
+                            elif asia_del_choice == 2:
+                                countries = sorted(set(row['company_country'] for row in asia_buyers))
+                                if not countries:
+                                    console.print("[red]No Asia buyer leads available.[/red]")
+                                    continue
+                                for idx, country in enumerate(countries, 1):
+                                    console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                cidx = typer.prompt("Select a country", type=int)
+                                if cidx == len(countries)+1:
+                                    continue
+                                if 1 <= cidx <= len(countries):
+                                    country = countries[cidx-1]
+                                    results = [row for row in asia_buyers if row['company_country'] == country]
+                                else:
+                                    console.print("[red]Invalid selection.[/red]")
+                                    continue
+                            elif asia_del_choice == 3:
+                                continue
                             else:
-                                console.print("[red]Failed to delete record.[/red]")
+                                console.print("[red]Invalid option.[/red]")
+                                continue
+                        elif del_choice == 3:
+                            from db import get_all_global_buyer_leads
+                            global_buyers = get_all_global_buyer_leads()
+                            console.print("[bold]Delete Global Buyer Record[/bold]")
+                            console.print("[cyan]1.[/cyan] Delete any Global buyer")
+                            console.print("[cyan]2.[/cyan] Delete by specific country")
+                            console.print("[cyan]3.[/cyan] Back")
+                            global_del_choice = typer.prompt("Select an option", type=int)
+                            if global_del_choice == 1:
+                                results = global_buyers
+                            elif global_del_choice == 2:
+                                countries = sorted(set(row['company_country'] for row in global_buyers))
+                                if not countries:
+                                    console.print("[red]No Global buyer leads available.[/red]")
+                                    continue
+                                for idx, country in enumerate(countries, 1):
+                                    console.print(f"[cyan]{idx}.[/cyan] {country}")
+                                console.print(f"[cyan]{len(countries)+1}.[/cyan] Back")
+                                cidx = typer.prompt("Select a country", type=int)
+                                if cidx == len(countries)+1:
+                                    continue
+                                if 1 <= cidx <= len(countries):
+                                    country = countries[cidx-1]
+                                    results = [row for row in global_buyers if row['company_country'] == country]
+                                else:
+                                    console.print("[red]Invalid selection.[/red]")
+                                    continue
+                            elif global_del_choice == 3:
+                                continue
+                            else:
+                                console.print("[red]Invalid option.[/red]")
+                                continue
+                        elif del_choice == 4:
+                            break
                         else:
-                            console.print("[yellow]Delete cancelled.[/yellow]")
-                    else:
-                        console.print("[red]Invalid selection.[/red]")
+                            console.print("[red]Invalid option.[/red]")
+                            continue
+                        if not results:
+                            console.print("[red]No records to delete.[/red]")
+                            continue
+                        for idx, row in enumerate(results, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {row['company_name']} ({row['hs_code']}, {row['keyword']}, {row.get('company_country', row.get('country', ''))})")
+                        idx = typer.prompt("Enter number to delete", type=int)
+                        if 1 <= idx <= len(results):
+                            record = results[idx-1]
+                            confirm = typer.confirm(f"Are you sure you want to delete {record['company_name']} ({record['hs_code']}, {record['keyword']}, {record.get('company_country', record.get('country', ''))})?", default=False)
+                            if confirm:
+                                success = delete_result(record['id'])
+                                if success:
+                                    console.print("[green]Record deleted successfully![/green]")
+                                else:
+                                    console.print("[red]Failed to delete record.[/red]")
+                            else:
+                                console.print("[yellow]Delete cancelled.[/yellow]")
+                        else:
+                            console.print("[red]Invalid selection.[/red]")
                 elif crud_choice == 4:
                     # Check for duplicates
                     duplicates = get_duplicate_summary()
