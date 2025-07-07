@@ -6,7 +6,7 @@ sys.path.append("..")  # Ensure parent dir is in path for imports
 from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edit_hs_code, delete_hs_code
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
-from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_global_hs_code_by_id
+from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_country_hs_codes, save_country_hs_code, update_country_hs_code, delete_country_hs_code, get_all_country_hs_codes, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_global_hs_code_by_id, init_international_hs_codes, get_all_international_hs_codes
 import pandas as pd
 import datetime
 import csv
@@ -16,7 +16,7 @@ app = typer.Typer()
 console = Console()
 
 MENU_OPTIONS = [
-    "Search Buyers with DeepSeek",
+    "Search Buyers with DeepSeek (Asia/Global/International)",
     "Manage HS Codes (CRUD)",
     "Manage Country-Specific HS Codes",
     "Manage Potential Buyer List",
@@ -211,6 +211,7 @@ def select_country_and_scope():
 @app.command()
 def run():
     init_db()
+    init_international_hs_codes()
     while True:
         choice = main_menu()
         if choice == 1:
@@ -261,7 +262,7 @@ def run():
                     console.print(f"[yellow]No existing HS codes found for {country}.[/yellow]")
                     console.print("[bold]Options:[/bold]")
                     console.print("[cyan]1.[/cyan] Query DeepSeek for country-specific HS codes")
-                    console.print("[cyan]2.[/cyan] Use global HS codes")
+                    console.print("[cyan]2.[/cyan] Use international HS codes")
                     console.print("[cyan]3.[/cyan] Back to Country Selection")
                     
                     option = typer.prompt("Select option", type=int)
@@ -341,26 +342,23 @@ def run():
                             continue
                             
                     elif option == 2:
-                        # Use global HS codes
-                        codes = load_hs_codes_xlsx()
+                        codes = get_all_international_hs_codes()
                         if not codes:
-                            console.print("[red]No global HS codes available.[/red]")
+                            console.print("[red]No international HS codes available.[/red]")
                             continue
-                        console.print("[bold]Select from global HS codes:[/bold]")
-                        for idx, (code, desc) in enumerate(codes, 1):
-                            console.print(f"[cyan]{idx}.[/cyan] {code} - {desc}")
+                        console.print("[bold]Select from international HS codes:[/bold]")
+                        for idx, code_info in enumerate(codes, 1):
+                            console.print(f"[cyan]{idx}.[/cyan] {code_info['hs_code']} - {code_info['description']}")
                         console.print(f"[cyan]{len(codes)+1}.[/cyan] Back to Country Selection")
                         idx = typer.prompt("Enter number to select", type=int)
-                        
                         if idx == len(codes)+1:
                             continue
                         if 1 <= idx <= len(codes):
-                            selected_code, selected_desc = codes[idx-1]
+                            selected_code = codes[idx-1]['hs_code']
+                            selected_desc = codes[idx-1]['description']
                             console.print(f"[green]Selected HS Code:[/green] [bold]{selected_code}[/bold] - {selected_desc}")
-                            
                             # Perform buyer search
                             if perform_buyer_search(country, selected_code, selected_desc):
-                                # Ask if user wants to continue
                                 console.print("[bold]Do you want to continue with another buyer search?[/bold]")
                                 console.print("[cyan]1.[/cyan] Yes, continue with another search")
                                 console.print("[cyan]2.[/cyan] No, back to main menu")
@@ -736,6 +734,8 @@ def run():
                 elif crud_choice == 4:
                     # View All HS Codes (global and country-specific)
                     global_codes = get_all_global_hs_codes()
+                    if not global_codes:
+                        global_codes = get_all_international_hs_codes()
                     country_codes = get_all_country_hs_codes()
                     if not global_codes and not country_codes:
                         console.print("[red]No HS codes found in database.[/red]")
@@ -754,8 +754,8 @@ def run():
                                 "Global",
                                 code_info['hs_code'],
                                 code_info['description'],
-                                code_info['source'],
-                                code_info['created_at']
+                                code_info.get('source', 'International'),
+                                code_info.get('created_at', '-')
                             )
                             idx += 1
                         for code_info in country_codes:

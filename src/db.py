@@ -444,3 +444,44 @@ def get_global_hs_code_by_id(hs_code_id: int) -> Dict:
         columns = ['id', 'hs_code', 'description', 'source', 'created_at']
         return dict(zip(columns, row))
     return None
+
+def init_international_hs_codes():
+    """
+    Create the international_hs_codes table and insert initial codes if not present.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS international_hs_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL
+        )
+    ''')
+    # Check if table is empty
+    c.execute('SELECT COUNT(*) FROM international_hs_codes')
+    count = c.fetchone()[0]
+    if count == 0:
+        codes = [
+            ("4015.12.1000", "Surgical Gloves"),
+            ("4015.19.1000", "Industrial Gloves"),
+            ("4015.12.9000", "Other Surgical"),
+            ("4015.19.9000", "Other Industrial"),
+            ("3926.20.1090", "Plastic Protective Gloves"),
+            ("6116.10.0000", "Textile Gloves"),
+            ("6216.00.4600", "Other Gloves (Fabric)")
+        ]
+        c.executemany('INSERT INTO international_hs_codes (hs_code, description) VALUES (?, ?)', codes)
+        conn.commit()
+    conn.close()
+
+def get_all_international_hs_codes():
+    """
+    Fetch all international HS codes from the static table.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT hs_code, description FROM international_hs_codes ORDER BY id ASC')
+    rows = c.fetchall()
+    conn.close()
+    return [{'hs_code': row[0], 'description': row[1]} for row in rows]
