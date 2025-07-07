@@ -530,15 +530,28 @@ def check_existing_buyer_leads(scope: str, hs_code: str, keyword: str) -> List[D
     table = {
         'Asia': 'asia_buyer_leads',
         'Global': 'global_buyer_leads',
+        'International': 'results',  # Use the main results table for international
     }[scope]
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(f'''
-        SELECT company_name, company_country, company_website_link, description, source 
-        FROM {table} 
-        WHERE hs_code = ? AND keyword = ?
-        ORDER BY id DESC
-    ''', (hs_code, keyword))
+    
+    if scope == 'International':
+        # For international, we need to check the results table which has a country column
+        c.execute(f'''
+            SELECT company_name, company_country, company_website_link, description, source 
+            FROM {table} 
+            WHERE hs_code = ? AND keyword = ?
+            ORDER BY id DESC
+        ''', (hs_code, keyword))
+    else:
+        # For Asia and Global, use the buyer leads tables
+        c.execute(f'''
+            SELECT company_name, company_country, company_website_link, description, source 
+            FROM {table} 
+            WHERE hs_code = ? AND keyword = ?
+            ORDER BY id DESC
+        ''', (hs_code, keyword))
+    
     rows = c.fetchall()
     conn.close()
     columns = ['company_name', 'company_country', 'company_website_link', 'description', 'source']
@@ -552,23 +565,42 @@ def insert_buyer_leads(scope: str, hs_code: str, keyword: str, companies: List[D
     table = {
         'Asia': 'asia_buyer_leads',
         'Global': 'global_buyer_leads',
+        'International': 'results',  # Use the main results table for international
     }[scope]
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     for company in companies:
-        c.execute(f'''
-            INSERT OR IGNORE INTO {table}
-            (hs_code, keyword, company_name, company_country, company_website_link, description, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            hs_code,
-            keyword,
-            company.get('company_name', ''),
-            company.get('company_country', ''),
-            company.get('company_website_link', ''),
-            company.get('description', ''),
-            'DeepSeek R1'
-        ))
+        if scope == 'International':
+            # For international, we need to include the country column
+            c.execute(f'''
+                INSERT OR IGNORE INTO {table}
+                (hs_code, keyword, country, company_name, company_country, company_website_link, description, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                hs_code,
+                keyword,
+                'International',  # Use 'International' as the country for international scope
+                company.get('company_name', ''),
+                company.get('company_country', ''),
+                company.get('company_website_link', ''),
+                company.get('description', ''),
+                'DeepSeek R1'
+            ))
+        else:
+            # For Asia and Global, use the buyer leads tables
+            c.execute(f'''
+                INSERT OR IGNORE INTO {table}
+                (hs_code, keyword, company_name, company_country, company_website_link, description, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                hs_code,
+                keyword,
+                company.get('company_name', ''),
+                company.get('company_country', ''),
+                company.get('company_website_link', ''),
+                company.get('description', ''),
+                'DeepSeek R1'
+            ))
     conn.commit()
     conn.close()
 
@@ -580,11 +612,20 @@ def fetch_all_buyer_leads(scope: str) -> List[Dict]:
     table = {
         'Asia': 'asia_buyer_leads',
         'Global': 'global_buyer_leads',
+        'International': 'results',  # Use the main results table for international
     }[scope]
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(f'SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at FROM {table} ORDER BY id DESC')
+    
+    if scope == 'International':
+        # For international, we need to handle the results table which has a country column
+        c.execute(f'SELECT id, hs_code, keyword, country, company_name, company_country, company_website_link, description, source FROM {table} ORDER BY id DESC')
+        columns = ['id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source']
+    else:
+        # For Asia and Global, use the buyer leads tables
+        c.execute(f'SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at FROM {table} ORDER BY id DESC')
+        columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    
     rows = c.fetchall()
     conn.close()
-    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows]
