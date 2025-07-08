@@ -162,27 +162,3 @@ def find_decision_makers_apollo(company_name: str, country: str, website: Option
     except Exception as e:
         print(f"[red]Error contacting Apollo.io: {e}[/red]")
         return []
-
-if __name__ == "__main__":
-    import json
-    APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
-    url = "https://api.apollo.io/api/v1/mixed_people/search"
-    headers = {
-        "accept": "application/json",
-        "Cache-Control": "no-cache",
-        "Content-Type": "application/json",
-        "x-api-key": APOLLO_API_KEY
-    }
-    body = {
-        "q_organization_name": "Comfort Rubber Gloves",
-        "organization_locations": "Malaysia",
-        "person_titles": ["buyer", "procurement"],
-        "page": 1,
-        "per_page": 3
-    }
-    resp = requests.post(url, headers=headers, json=body)
-    print(f"Status: {resp.status_code}")
-    try:
-        print(json.dumps(resp.json(), indent=2))
-    except Exception:
-        print(resp.text)
