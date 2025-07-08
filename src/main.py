@@ -11,12 +11,14 @@ import pandas as pd
 import datetime
 import csv
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from apollo import find_decision_makers_apollo
 
 app = typer.Typer()
 console = Console()
 
 MENU_OPTIONS = [
     "Search Buyers with DeepSeek (Asia/Global/International)",
+    "Find Decision Makers with Apollo.io",  # Now option 2
     "Manage HS Codes (CRUD)",
     "Manage Potential Buyer List",
     "Export Results (CSV)",
@@ -393,6 +395,38 @@ def run():
                     # End of HS code and buyer search loop for this country
                 # End of country selection loop
         elif choice == 2:
+            console.rule("[bold blue]Find Decision Makers with Apollo.io")
+            company_name = typer.prompt("Enter the company name (e.g., ABC Gloves Sdn Bhd)")
+            country = typer.prompt("Enter the country (e.g., Malaysia)")
+            website = typer.prompt("Enter the company website (optional)", default="")
+            # Call the Apollo.io search function
+            results = find_decision_makers_apollo(company_name, country, website)
+            # Display stub output
+            if not results:
+                console.rule("[bold red]No Decision Makers Found[/bold red]")
+                console.print(f"[yellow]No decision makers were found for [bold]{company_name}[/bold] in [bold]{country}[/bold].")
+                console.print("[dim]Possible reasons: company not in Apollo, no matching roles, or API limits reached.")
+                console.print("[cyan]Tips:[/cyan] Try a different company name, check spelling, or try again later.")
+            else:
+                console.print("[green]Found decision makers:")
+                for r in results:
+                    console.print(r)
+                # Offer to export results only if there are results
+                export_choice = typer.confirm("Would you like to export these results to CSV?", default=True)
+                if export_choice:
+                    import csv, os
+                    export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
+                    os.makedirs(export_dir, exist_ok=True)
+                    default_filename = f"apollo_{company_name.replace(' ', '_')}_{country.replace(' ', '_')}.csv"
+                    filename = typer.prompt("Enter filename for export", default=default_filename)
+                    filepath = os.path.join(export_dir, filename)
+                    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                        writer = csv.DictWriter(f, fieldnames=["name", "title", "email", "linkedin"])
+                        writer.writeheader()
+                        for row in results:
+                            writer.writerow(row)
+                    console.print(f"[green]Exported results to {filepath}")
+        elif choice == 3:
             while True:
                 crud_choice = hs_code_crud_menu()
                 if crud_choice == 1:
@@ -889,7 +923,7 @@ def run():
                     break
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")
-        elif choice == 3:
+        elif choice == 4:
             # Manage Potential Buyer List
             while True:
                 crud_choice = buyer_history_crud_menu()
@@ -1356,7 +1390,7 @@ def run():
                     break
                 else:
                     console.print("[red]Invalid option. Please try again.[/red]")
-        elif choice == 4:
+        elif choice == 5:
             # Export Results (CSV)
             results = fetch_all_results()
             if not results:
@@ -1379,7 +1413,7 @@ def run():
                         writer.writeheader()
                         writer.writerows(results)
                 console.print(f"[green]Results exported to:[/green] [bold]{export_path}[/bold]")
-        elif choice == 5:
+        elif choice == 6:
             console.print("[green]Goodbye!")
             break
         else:
