@@ -208,7 +208,8 @@ def run():
         choice = main_menu()
         if choice == 1:
             # Buyer search state machine
-            while True:
+            buyer_search_active = True
+            while buyer_search_active:
                 # 1. Scope selection
                 scope, scope_name = None, None
                 while scope_name is None:
@@ -229,9 +230,11 @@ def run():
                         console.print("[red]Invalid scope selection.[/red]")
                         continue
                 if scope == 3:
+                    buyer_search_active = False
                     break
                 # 2. Country selection
-                while True:
+                country_selection_active = True
+                while country_selection_active and buyer_search_active:
                     console.print(f"[bold]Select a country from {scope_name} or enter a custom country:[/bold]")
                     for idx, ctry in enumerate(country_list, 1):
                         console.print(f"[cyan]{idx}.[/cyan] {ctry}")
@@ -259,7 +262,8 @@ def run():
                     else:
                         console.print(f"[yellow]No HS codes found for {country}.[/yellow]")
                     # 3. HS code and buyer search loop for this country
-                    while True:
+                    hs_code_selection_active = True
+                    while hs_code_selection_active and country_selection_active and buyer_search_active:
                         if scope_name == "Asia":
                             codes = [c for c in get_all_asia_hs_codes() if c['country'].lower() == country.lower()]
                         else:
@@ -374,7 +378,10 @@ def run():
                                 elif next_action == 3:
                                     break    # Go back to scope selection (outer loop)
                                 elif next_action == 4:
-                                    return   # Exit to main menu
+                                    buyer_search_active = False
+                                    country_selection_active = False
+                                    hs_code_selection_active = False
+                                    break    # Exit to main menu
                                 else:
                                     console.print("[red]Invalid option.[/red]")
                                     break
