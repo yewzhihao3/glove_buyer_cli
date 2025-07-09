@@ -396,36 +396,45 @@ def run():
                 # End of country selection loop
         elif choice == 2:
             console.rule("[bold blue]Find Decision Makers with Apollo.io")
-            company_name = typer.prompt("Enter the company name (e.g., ABC Gloves Sdn Bhd)")
-            country = typer.prompt("Enter the country (e.g., Malaysia)")
-            website = typer.prompt("Enter the company website (optional)", default="")
-            # Call the Apollo.io search function
-            results = find_decision_makers_apollo(company_name, country, website)
-            # Display stub output
-            if not results:
-                console.rule("[bold red]No Decision Makers Found[/bold red]")
-                console.print(f"[yellow]No decision makers were found for [bold]{company_name}[/bold] in [bold]{country}[/bold].")
-                console.print("[dim]Possible reasons: company not in Apollo, no matching roles, or API limits reached.")
-                console.print("[cyan]Tips:[/cyan] Try a different company name, check spelling, or try again later.")
+            console.print("[bold]How would you like to search for decision makers?[/bold]")
+            console.print("[cyan]1.[/cyan] Search via Database (coming soon)")
+            console.print("[cyan]2.[/cyan] Custom Search (API)")
+            sub_choice = typer.prompt("Select an option", type=int)
+            if sub_choice == 1:
+                console.print("[yellow]Search via Database: [bold]Coming soon![/bold][/yellow]")
+            elif sub_choice == 2:
+                company_name = typer.prompt("Enter the company name (e.g., ABC Gloves Sdn Bhd)")
+                country = typer.prompt("Enter the country (e.g., Malaysia)")
+                website = typer.prompt("Enter the company website (optional)", default="")
+                # Call the Apollo.io search function
+                results = find_decision_makers_apollo(company_name, country, website)
+                # Display stub output
+                if not results:
+                    console.rule("[bold red]No Decision Makers Found[/bold red]")
+                    console.print(f"[yellow]No decision makers were found for [bold]{company_name}[/bold] in [bold]{country}[/bold].")
+                    console.print("[dim]Possible reasons: company not in Apollo, no matching roles, or API limits reached.")
+                    console.print("[cyan]Tips:[/cyan] Try a different company name, check spelling, or try again later.")
+                else:
+                    console.print("[green]Found decision makers:")
+                    for r in results:
+                        console.print(r)
+                    # Offer to export results only if there are results
+                    export_choice = typer.confirm("Would you like to export these results to CSV?", default=True)
+                    if export_choice:
+                        import csv, os
+                        export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
+                        os.makedirs(export_dir, exist_ok=True)
+                        default_filename = f"apollo_{company_name.replace(' ', '_')}_{country.replace(' ', '_')}.csv"
+                        filename = typer.prompt("Enter filename for export", default=default_filename)
+                        filepath = os.path.join(export_dir, filename)
+                        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                            writer = csv.DictWriter(f, fieldnames=["name", "title", "email", "linkedin"])
+                            writer.writeheader()
+                            for row in results:
+                                writer.writerow(row)
+                        console.print(f"[green]Exported results to {filepath}")
             else:
-                console.print("[green]Found decision makers:")
-                for r in results:
-                    console.print(r)
-                # Offer to export results only if there are results
-                export_choice = typer.confirm("Would you like to export these results to CSV?", default=True)
-                if export_choice:
-                    import csv, os
-                    export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
-                    os.makedirs(export_dir, exist_ok=True)
-                    default_filename = f"apollo_{company_name.replace(' ', '_')}_{country.replace(' ', '_')}.csv"
-                    filename = typer.prompt("Enter filename for export", default=default_filename)
-                    filepath = os.path.join(export_dir, filename)
-                    with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                        writer = csv.DictWriter(f, fieldnames=["name", "title", "email", "linkedin"])
-                        writer.writeheader()
-                        for row in results:
-                            writer.writerow(row)
-                    console.print(f"[green]Exported results to {filepath}")
+                console.print("[red]Invalid selection.[/red]")
         elif choice == 3:
             while True:
                 crud_choice = hs_code_crud_menu()
