@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'results.db')
 
@@ -647,3 +647,91 @@ def get_all_global_buyer_leads() -> List[Dict]:
     conn.close()
     columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows]
+
+def get_asia_buyer_leads_by_country(country: str) -> List[Dict]:
+    """
+    Get all Asia buyer leads for a specific country.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at 
+        FROM asia_buyer_leads 
+        WHERE company_country LIKE ? 
+        ORDER BY id DESC
+    ''', (f'%{country}%',))
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def get_global_buyer_leads_by_country(country: str) -> List[Dict]:
+    """
+    Get all Global buyer leads for a specific country.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at 
+        FROM global_buyer_leads 
+        WHERE company_country LIKE ? 
+        ORDER BY id DESC
+    ''', (f'%{country}%',))
+    rows = c.fetchall()
+    conn.close()
+    columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def get_buyer_lead_by_id(scope: str, record_id: int) -> Optional[Dict]:
+    """
+    Get a specific buyer lead by ID from the specified scope.
+    """
+    table = {
+        'Asia': 'asia_buyer_leads',
+        'Global': 'global_buyer_leads',
+    }[scope]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f'''
+        SELECT id, hs_code, keyword, company_name, company_country, company_website_link, description, source, created_at 
+        FROM {table} 
+        WHERE id = ?
+    ''', (record_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        columns = ['id', 'hs_code', 'keyword', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+        return dict(zip(columns, row))
+    return None
+
+def get_available_countries_asia() -> List[str]:
+    """
+    Get list of countries that have companies in the Asia buyer leads table.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT DISTINCT company_country 
+        FROM asia_buyer_leads 
+        WHERE company_country IS NOT NULL AND company_country != ''
+        ORDER BY company_country
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+def get_available_countries_global() -> List[str]:
+    """
+    Get list of countries that have companies in the Global buyer leads table.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT DISTINCT company_country 
+        FROM global_buyer_leads 
+        WHERE company_country IS NOT NULL AND company_country != ''
+        ORDER BY company_country
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    return [row[0] for row in rows]

@@ -7,6 +7,8 @@ from hs_code_manager import load_hs_codes_xlsx, select_hs_code, add_hs_code, edi
 from rich.table import Table
 from deepseek_agent import query_deepseek, query_deepseek_for_hs_codes, query_deepseek_for_global_hs_codes, parse_hs_codes_from_deepseek
 from db import init_db, insert_results, parse_deepseek_output, fetch_all_results, update_result, delete_result, get_all_global_hs_codes, save_global_hs_code, update_global_hs_code, delete_global_hs_code, get_all_asia_hs_codes, save_asia_hs_code, update_asia_hs_code, delete_asia_hs_code, check_existing_buyer_results, find_and_remove_duplicates, get_duplicate_summary, init_international_hs_codes, get_all_international_hs_codes, check_existing_buyer_leads, insert_buyer_leads, get_all_asia_buyer_leads, get_all_global_buyer_leads
+from db import get_asia_buyer_leads_by_country, get_global_buyer_leads_by_country, get_buyer_lead_by_id
+from db import get_available_countries_asia, get_available_countries_global
 import pandas as pd
 import datetime
 import csv
@@ -231,6 +233,9 @@ def run():
                     else:
                         console.print("[red]Invalid scope selection.[/red]")
                         continue
+                    if not country_list:
+                        console.print(f"[yellow]No companies found in {scope_name} database.[/yellow]")
+                        continue
                 if scope == 3:
                     buyer_search_active = False
                     break
@@ -401,7 +406,106 @@ def run():
             console.print("[cyan]2.[/cyan] Custom Search (API)")
             sub_choice = typer.prompt("Select an option", type=int)
             if sub_choice == 1:
-                console.print("[yellow]Search via Database: [bold]Coming soon![/bold][/yellow]")
+                # Database search implementation
+                console.print("[bold]Select scope for database search:[/bold]")
+                console.print("[cyan]1.[/cyan] Asia")
+                console.print("[cyan]2.[/cyan] Global")
+                scope_choice = typer.prompt("Select scope", type=int)
+                
+                if scope_choice == 1:
+                    scope_name = "Asia"
+                    country_list = get_available_countries_asia()
+                elif scope_choice == 2:
+                    scope_name = "Global"
+                    country_list = get_available_countries_global()
+                else:
+                    console.print("[red]Invalid scope selection.[/red]")
+                    continue
+                
+                if not country_list:
+                    console.print(f"[yellow]No companies found in {scope_name} database.[/yellow]")
+                    continue
+                
+                # Country selection
+                console.print(f"[bold]Select a country from {scope_name} (showing only countries with data):[/bold]")
+                for idx, country in enumerate(country_list, 1):
+                    console.print(f"[cyan]{idx}.[/cyan] {country}")
+                console.print(f"[cyan]{len(country_list)+1}.[/cyan] Back to Apollo menu")
+                country_idx = typer.prompt("Enter number to select country", type=int)
+                
+                if country_idx == len(country_list)+1:
+                    continue
+                
+                if 1 <= country_idx <= len(country_list):
+                    selected_country = country_list[country_idx-1]
+                    if scope_name == "Asia":
+                        buyer_leads = get_asia_buyer_leads_by_country(selected_country)
+                    else:
+                        buyer_leads = get_global_buyer_leads_by_country(selected_country)
+                    console.print(f"[green]Found {len(buyer_leads)} companies in {selected_country}:[/green]")
+                else:
+                    console.print("[red]Invalid country selection.[/red]")
+                    continue
+                
+                # Display companies with IDs
+                console.print("\n[bold]Available companies:[/bold]")
+                for idx, lead in enumerate(buyer_leads, 1):
+                    console.print(f"[cyan]{idx}.[/cyan] {lead['company_name']} - {lead['company_country']} ({lead['hs_code']})")
+                
+                # Company selection
+                console.print("\n[bold]Select a company to search for decision makers:[/bold]")
+                console.print("[cyan]0.[/cyan] [italic]Back to country selection[/italic]")
+                selection_num = typer.prompt("Enter number to select company", type=int)
+                
+                if selection_num == 0:
+                    continue
+                if 1 <= selection_num <= len(buyer_leads):
+                    selected_company = buyer_leads[selection_num - 1]
+                else:
+                    console.print("[red]Invalid selection.[/red]")
+                    continue
+                
+                console.print(f"[green]Searching decision makers for: {selected_company['company_name']} in {selected_company['company_country']}[/green]")
+                
+                # Run Apollo search
+                results = find_decision_makers_apollo(
+                    selected_company['company_name'], 
+                    selected_company['company_country'], 
+                    selected_company.get('company_website_link', '')
+                )
+                
+                # Display results
+                if not results:
+                    console.rule("[bold red]No Decision Makers Found[/bold red]")
+                    console.print(f"[yellow]No decision makers were found for [bold]{selected_company['company_name']}[/bold] in [bold]{selected_company['company_country']}[/bold].")
+                    console.print("[dim]Possible reasons: company not in Apollo, no matching roles, or API limits reached.")
+                    console.print("[cyan]Tips:[/cyan] Try a different company name, check spelling, or try again later.")
+                    # Ask if user wants to try another search
+                    try_another = typer.confirm("Would you like to try another search?", default=True)
+                    if try_another:
+                        continue
+                else:
+                    console.print("[green]Found decision makers:")
+                    for r in results:
+                        console.print(r)
+                    # Offer to export results only if there are results
+                    export_choice = typer.confirm("Would you like to export these results to CSV?", default=True)
+                    if export_choice:
+                        export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
+                        os.makedirs(export_dir, exist_ok=True)
+                        default_filename = f"apollo_{selected_company['company_name'].replace(' ', '_')}_{selected_company['company_country'].replace(' ', '_')}.csv"
+                        filename = typer.prompt("Enter filename for export", default=default_filename)
+                        filepath = os.path.join(export_dir, filename)
+                        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                            writer = csv.DictWriter(f, fieldnames=["name", "title", "email", "linkedin"])
+                            writer.writeheader()
+                            for row in results:
+                                writer.writerow(row)
+                        console.print(f"[green]Exported results to {filepath}")
+                    # Ask if user wants to try another search
+                    try_another = typer.confirm("Would you like to try another search?", default=True)
+                    if try_another:
+                        continue
             elif sub_choice == 2:
                 company_name = typer.prompt("Enter the company name (e.g., ABC Gloves Sdn Bhd)")
                 country = typer.prompt("Enter the country (e.g., Malaysia)")
@@ -414,6 +518,10 @@ def run():
                     console.print(f"[yellow]No decision makers were found for [bold]{company_name}[/bold] in [bold]{country}[/bold].")
                     console.print("[dim]Possible reasons: company not in Apollo, no matching roles, or API limits reached.")
                     console.print("[cyan]Tips:[/cyan] Try a different company name, check spelling, or try again later.")
+                    # Ask if user wants to try another search
+                    try_another = typer.confirm("Would you like to try another search?", default=True)
+                    if try_another:
+                        continue
                 else:
                     console.print("[green]Found decision makers:")
                     for r in results:
@@ -421,7 +529,6 @@ def run():
                     # Offer to export results only if there are results
                     export_choice = typer.confirm("Would you like to export these results to CSV?", default=True)
                     if export_choice:
-                        import csv, os
                         export_dir = os.path.join(os.path.dirname(__file__), '..', 'EXPORT')
                         os.makedirs(export_dir, exist_ok=True)
                         default_filename = f"apollo_{company_name.replace(' ', '_')}_{country.replace(' ', '_')}.csv"
@@ -433,6 +540,10 @@ def run():
                             for row in results:
                                 writer.writerow(row)
                         console.print(f"[green]Exported results to {filepath}")
+                    # Ask if user wants to try another search
+                    try_another = typer.confirm("Would you like to try another search?", default=True)
+                    if try_another:
+                        continue
             else:
                 console.print("[red]Invalid selection.[/red]")
         elif choice == 3:
@@ -448,10 +559,10 @@ def run():
                     if scope_choice == 3:
                         continue
                     if scope_choice == 1:
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                        country_list = get_available_countries_asia()
                         current_scope = "Asia"
                     elif scope_choice == 2:
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                        country_list = get_available_countries_global()
                         current_scope = "Global"
                     else:
                         console.print("[red]Invalid scope selection.[/red]")
@@ -635,10 +746,10 @@ def run():
                         continue
                     if region_choice == 1:
                         current_scope = "Asia"
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                        country_list = get_available_countries_asia()
                     elif region_choice == 2:
                         current_scope = "Global"
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                        country_list = get_available_countries_global()
                     else:
                         console.print("[red]Invalid region selection.[/red]")
                         continue
@@ -739,10 +850,10 @@ def run():
                         continue
                     if region_choice == 1:
                         current_scope = "Asia"
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'asia_countries.txt'))
+                        country_list = get_available_countries_asia()
                     elif region_choice == 2:
                         current_scope = "Global"
-                        country_list = load_country_list(os.path.join(os.path.dirname(__file__), '..', 'prompts', 'global_countries.txt'))
+                        country_list = get_available_countries_global()
                     else:
                         console.print("[red]Invalid region selection.[/red]")
                         continue
