@@ -128,3 +128,62 @@ def get_available_countries_global():
     db_countries_mapped = set('United States' if c in us_aliases or c == 'United States' else c for c in db_countries)
     conn.close()
     return sorted(list(global_countries & db_countries_mapped)) 
+
+def get_all_contacts():
+    """Return all contacts (potential buyers) as a list of dicts."""
+    conn = sqlite3.connect(APOLLO_DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT * FROM contacts')
+    rows = c.fetchall()
+    columns = [desc[0] for desc in c.description]
+    conn.close()
+    return [dict(zip(columns, row)) for row in rows]
+
+def update_contact(contact_id, updated_fields):
+    """Update a contact by id. updated_fields is a dict of column:value."""
+    if not updated_fields:
+        return False
+    conn = sqlite3.connect(APOLLO_DB_PATH)
+    c = conn.cursor()
+    set_clause = ', '.join([f"{k} = ?" for k in updated_fields.keys()])
+    values = list(updated_fields.values()) + [contact_id]
+    c.execute(f'UPDATE contacts SET {set_clause} WHERE id = ?', values)
+    conn.commit()
+    affected = c.rowcount
+    conn.close()
+    return affected > 0
+
+def delete_contact(contact_id):
+    """Delete a contact by id."""
+    conn = sqlite3.connect(APOLLO_DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM contacts WHERE id = ?', (contact_id,))
+    conn.commit()
+    affected = c.rowcount
+    conn.close()
+    return affected > 0
+
+def find_duplicate_contacts():
+    """Find duplicate contacts by email or (name+company_name). Returns a list of lists of duplicate contact dicts."""
+    conn = sqlite3.connect(APOLLO_DB_PATH)
+    c = conn.cursor()
+    # By email
+    c.execute('SELECT email FROM contacts WHERE email IS NOT NULL AND email != "" GROUP BY email HAVING COUNT(*) > 1')
+    dup_emails = [row[0] for row in c.fetchall()]
+    duplicates = []
+    for email in dup_emails:
+        c.execute('SELECT * FROM contacts WHERE email = ?', (email,))
+        rows = c.fetchall()
+        columns = [desc[0] for desc in c.description]
+        duplicates.append([dict(zip(columns, row)) for row in rows])
+    # By (name+company_name)
+    c.execute('SELECT name, company_name FROM contacts WHERE name IS NOT NULL AND company_name IS NOT NULL GROUP BY name, company_name HAVING COUNT(*) > 1')
+    for name, company_name in c.fetchall():
+        c.execute('SELECT * FROM contacts WHERE name = ? AND company_name = ?', (name, company_name))
+        rows = c.fetchall()
+        columns = [desc[0] for desc in c.description]
+        group = [dict(zip(columns, row)) for row in rows]
+        if len(group) > 1 and group not in duplicates:
+            duplicates.append(group)
+    conn.close()
+    return duplicates 

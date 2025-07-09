@@ -12,11 +12,11 @@ from .export_menu import export_menu
 console = Console()
 
 MENU_OPTIONS = [
-    "Search Buyers with DeepSeek (Asia/Global/International) 50% accuracy",
+    "Search Buyers with DeepSeek (Asia/Global/International)",
     "Find Decision Makers with Apollo.io",
     "Manage HS Codes (CRUD)",
     "Manage Potential Buyer List",
-    "Export Results (CSV)",
+    "Export Results (CSV) [In Progress]",
     "Exit"
 ]
 
