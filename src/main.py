@@ -14,6 +14,10 @@ import datetime
 import csv
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from apollo import find_decision_makers_apollo
+from db_apollo import init_apollo_db
+from db_apollo import insert_company
+import requests
+from rich.prompt import Prompt
 
 app = typer.Typer()
 console = Console()
@@ -1534,6 +1538,9 @@ def run():
                         writer.writerows(results)
                 console.print(f"[green]Results exported to:[/green] [bold]{export_path}[/bold]")
         elif choice == 6:
+            # This was the Apollo extraction menu, now removed
+            console.print("[red]Invalid option. Please try again.[/red]")
+        elif choice == 7:
             console.print("[green]Goodbye!")
             break
         else:
