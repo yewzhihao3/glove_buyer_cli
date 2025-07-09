@@ -171,7 +171,6 @@ def parse_deepseek_output(output: str) -> List[Dict]:
                 company['description'] = description
         if company.get('company_name'):
             companies.append(company)
-    print("DEBUG: Parsed company names:", [c['company_name'] for c in companies])
     return companies
 
 def fetch_all_results():

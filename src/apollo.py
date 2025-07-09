@@ -9,9 +9,7 @@ load_dotenv(dotenv_path)
 
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
 if APOLLO_API_KEY:
-    print(f"[DEBUG] Loaded APOLLO_API_KEY: {'*' * (len(APOLLO_API_KEY)-4) + APOLLO_API_KEY[-4:]}")
-else:
-    print("[DEBUG] APOLLO_API_KEY not found in environment!")
+    pass
 
 APOLLO_BASE_URL = "https://api.apollo.io/v1"
 
