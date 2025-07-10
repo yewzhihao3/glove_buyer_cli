@@ -1,1 +1,0 @@
-# GUI package for the Glove Buyer application 

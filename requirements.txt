@@ -7,4 +7,4 @@ openpyxl
 typer
 rich
 requests
-PySide6
+customtkinter
