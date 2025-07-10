@@ -8,9 +8,104 @@ import csv
 import os
 from tkinter import filedialog
 import db  # Add this import at the top if not present
+from concurrent.futures import ThreadPoolExecutor
+import queue
+import time
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
+
+# Global background task manager
+class BackgroundTaskManager:
+    def __init__(self):
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.task_queue = queue.Queue()
+        self.running = True
+        
+        # Start background worker thread
+        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
+    
+    def _worker(self):
+        """Background worker that processes tasks"""
+        while self.running:
+            try:
+                task = self.task_queue.get(timeout=1)
+                if task is None:  # Shutdown signal
+                    break
+                
+                func, args, kwargs, callback, error_callback = task
+                try:
+                    result = func(*args, **kwargs)
+                    if callback:
+                        callback(result)
+                except Exception as e:
+                    if error_callback:
+                        error_callback(e)
+                    else:
+                        print(f"Background task error: {e}")
+                finally:
+                    self.task_queue.task_done()
+            except queue.Empty:
+                continue
+    
+    def submit_task(self, func, callback=None, error_callback=None, *args, **kwargs):
+        """Submit a task to run in background"""
+        self.task_queue.put((func, args, kwargs, callback, error_callback))
+    
+    def shutdown(self):
+        """Shutdown the task manager"""
+        self.running = False
+        self.task_queue.put(None)
+        self.executor.shutdown(wait=True)
+
+# Global task manager instance
+task_manager = BackgroundTaskManager()
+
+# Simple caching system
+class Cache:
+    def __init__(self):
+        self.cache = {}
+        self.cache_timestamps = {}
+        self.cache_duration = 300  # 5 minutes
+    
+    def get(self, key):
+        if key in self.cache:
+            if time.time() - self.cache_timestamps.get(key, 0) < self.cache_duration:
+                return self.cache[key]
+            else:
+                # Cache expired, remove it
+                del self.cache[key]
+                if key in self.cache_timestamps:
+                    del self.cache_timestamps[key]
+        return None
+    
+    def set(self, key, value):
+        self.cache[key] = value
+        self.cache_timestamps[key] = time.time()
+    
+    def clear(self):
+        self.cache.clear()
+        self.cache_timestamps.clear()
+    
+    def invalidate(self, pattern=None):
+        """Invalidate cache entries matching a pattern"""
+        if pattern is None:
+            self.clear()
+        else:
+            keys_to_remove = [key for key in self.cache.keys() if pattern in key]
+            for key in keys_to_remove:
+                del self.cache[key]
+                if key in self.cache_timestamps:
+                    del self.cache_timestamps[key]
+
+# Global cache instance
+cache = Cache()
+
+# Database operation wrappers for background execution
+def run_in_background(func, callback=None, error_callback=None, *args, **kwargs):
+    """Helper function to run database operations in background"""
+    task_manager.submit_task(func, callback, error_callback, *args, **kwargs)
 
 NAV_LABELS = [
     "Dashboard",
@@ -60,6 +155,8 @@ class BuyerSearchPage(ctk.CTkFrame):
         self._build_ui()
         self.search_results = []
         self.worker = None
+        # Load countries synchronously after widgets are created
+        self.load_countries()
 
     def _build_ui(self):
         # Title
@@ -179,27 +276,42 @@ class BuyerSearchPage(ctk.CTkFrame):
         self.progress_bar.pack_forget()  # Hide initially
         
         # Initialize data
-        self.load_countries()
         self.load_keywords()
         self.load_hs_codes()
+        
+        # Load countries after a short delay to ensure UI is ready
+        self.after(100, self.load_countries)
 
     def load_countries(self):
         """Load available countries from database that have HS codes"""
+        # Check cache first
+        cached_countries = cache.get("buyer_search_countries")
+        if cached_countries:
+            self.country_list = cached_countries
+            return
         try:
-            # Get all HS codes from database
             hs_codes = GUI_db.get_all_hs_codes()
-            # Extract unique countries that have HS codes
             countries_with_hs_codes = set()
             for code in hs_codes:
                 if code.get('country'):
                     countries_with_hs_codes.add(code['country'])
-            
-            # Sort the countries
             countries = ["Select Country"] + sorted(list(countries_with_hs_codes))
             self.country_list = countries
+            cache.set("buyer_search_countries", countries)
         except Exception as e:
             print(f"Error loading countries: {e}")
             self.country_list = ["Select Country"]
+
+    def _update_countries_ui(self, countries):
+        """Update countries list on main thread"""
+        self.country_list = countries
+        # Cache the result
+        cache.set("buyer_search_countries", countries)
+        print(f"[QUICK DEBUG] Updated countries UI: {len(countries)} countries")
+    
+    def _set_default_countries(self):
+        """Set default countries on main thread"""
+        self.country_list = ["Select Country"]
 
     def load_keywords(self):
         """Load keyword options from file and add custom option"""
@@ -243,21 +355,58 @@ class BuyerSearchPage(ctk.CTkFrame):
             messagebox.showwarning("Select Country First", "Please select a country first to see available HS codes.")
             return
         
-        # Get HS codes for selected country
-        try:
-            hs_codes = GUI_db.get_hs_codes_by_country(country)
-            hs_options = ["Select HS Code"]
-            for code in hs_codes:
-                hs_options.append(f"{code['hs_code']} - {code['description']}")
-            
-            dialog = HSCodeSelectorDialog(self, hs_options)
-            self.wait_window(dialog)
-            selected_hs = dialog.get_selected()
-            if selected_hs and selected_hs != "Select HS Code":
-                self.hs_var.set(selected_hs)
-        except Exception as e:
-            print(f"Error loading HS codes for country: {e}")
+        # Show loading indicator
+        loading_dialog = ctk.CTkToplevel(self)
+        loading_dialog.title("Loading")
+        loading_dialog.geometry("300x100")
+        loading_dialog.grab_set()
+        loading_dialog.transient(self)
+        
+        ctk.CTkLabel(loading_dialog, text="Loading HS codes...", font=("Poppins", 14)).pack(pady=20)
+        progress_bar = ctk.CTkProgressBar(loading_dialog, mode="indeterminate")
+        progress_bar.pack(pady=10)
+        progress_bar.start()
+        
+        def load_hs_codes_task():
+            try:
+                hs_codes = GUI_db.get_hs_codes_by_country(country)
+                hs_options = ["Select HS Code"]
+                for code in hs_codes:
+                    hs_options.append(f"{code['hs_code']} - {code['description']}")
+                return hs_options
+            except Exception as e:
+                print(f"Error loading HS codes for country: {e}")
+                return None
+        
+        def on_hs_codes_loaded(hs_options):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._handle_hs_codes_loaded(hs_options, loading_dialog, country))
+        
+        def on_error(error):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._handle_hs_codes_error(error, loading_dialog, country))
+        
+        # Run in background
+        run_in_background(load_hs_codes_task, on_hs_codes_loaded, on_error)
+    
+    def _handle_hs_codes_loaded(self, hs_options, loading_dialog, country):
+        """Handle HS codes loaded on main thread"""
+        loading_dialog.destroy()
+        if hs_options is None:
             messagebox.showerror("Error", f"Error loading HS codes for {country}")
+            return
+        
+        dialog = HSCodeSelectorDialog(self, hs_options)
+        self.wait_window(dialog)
+        selected_hs = dialog.get_selected()
+        if selected_hs and selected_hs != "Select HS Code":
+            self.hs_var.set(selected_hs)
+    
+    def _handle_hs_codes_error(self, error, loading_dialog, country):
+        """Handle HS codes error on main thread"""
+        loading_dialog.destroy()
+        print(f"Error loading HS codes for country: {error}")
+        messagebox.showerror("Error", f"Error loading HS codes for {country}")
 
     def open_keyword_selector(self):
         """Open keyword selection dialog"""
@@ -296,8 +445,10 @@ class BuyerSearchPage(ctk.CTkFrame):
 
     def refresh_buyer_search_data(self):
         """Refresh BuyerSearchPage data after new HS codes are added"""
+        # Invalidate cache
+        cache.invalidate("buyer_search_countries")
+        cache.invalidate("hs_codes")
         self.load_countries()
-        print("[DEBUG] Refreshed BuyerSearchPage data")
 
     def perform_search(self):
         """Perform AI buyer search"""
@@ -525,18 +676,49 @@ class HSCodePage(ctk.CTkFrame):
         delete_btn.pack(side="right", padx=(0, 12))
 
     def populate_table(self):
+        def load_table_data():
+            country = self.country_var.get()
+            query = self.search_var.get().strip().lower()
+            if country == "All":
+                data = GUI_db.get_all_hs_codes()
+            else:
+                data = GUI_db.get_hs_codes_by_country(country)
+            
+            # Filter data
+            filtered_data = []
+            for entry in data:
+                if query and query not in entry['hs_code'].lower() and query not in entry['description'].lower():
+                    continue
+                filtered_data.append(entry)
+            
+            return filtered_data
+        
+        def on_data_loaded(data):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._update_table_ui(data))
+        
+        def on_error(error):
+            print(f"Error loading table data: {error}")
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._clear_table_ui())
+        
+        # Run in background
+        run_in_background(load_table_data, on_data_loaded, on_error)
+    
+    def _update_table_ui(self, data):
+        """Update table on main thread"""
+        # Clear existing rows
         for row in self.table.get_children():
             self.table.delete(row)
-        country = self.country_var.get()
-        query = self.search_var.get().strip().lower()
-        if country == "All":
-            data = GUI_db.get_all_hs_codes()
-        else:
-            data = GUI_db.get_hs_codes_by_country(country)
+        
+        # Insert new data
         for entry in data:
-            if query and query not in entry['hs_code'].lower() and query not in entry['description'].lower():
-                continue
             self.table.insert("", "end", iid=entry['id'], values=(entry['hs_code'], entry['country'], entry['description']))
+    
+    def _clear_table_ui(self):
+        """Clear table on main thread"""
+        for row in self.table.get_children():
+            self.table.delete(row)
 
     def do_search(self):
         self.populate_table()
@@ -723,6 +905,12 @@ class HSCodePage(ctk.CTkFrame):
     def refresh_other_pages(self):
         """Refresh other pages that depend on HS codes"""
         try:
+            # Invalidate cache
+            cache.invalidate("buyer_search_countries")
+            cache.invalidate("hs_codes")
+            cache.invalidate("apollo_countries")
+            cache.invalidate("apollo_companies")
+            
             # Find the main app instance to access other pages
             main_app = self.winfo_toplevel()
             if hasattr(main_app, 'pages'):
@@ -730,9 +918,8 @@ class HSCodePage(ctk.CTkFrame):
                 buyer_search_page = main_app.pages[1]  # Index 1 is BuyerSearchPage
                 if hasattr(buyer_search_page, 'refresh_buyer_search_data'):
                     buyer_search_page.refresh_buyer_search_data()
-                    print("[DEBUG] Refreshed BuyerSearchPage data")
         except Exception as e:
-            print(f"[DEBUG] Error refreshing other pages: {e}")
+            print(f"Error refreshing other pages: {e}")
 
 
 
@@ -830,6 +1017,8 @@ class ApolloPage(ctk.CTkFrame):
         super().__init__(master, fg_color="#F5F7FA")
         self._build_ui()
         self.worker = None
+        self.load_companies()
+        self.load_countries()
 
     def _build_ui(self):
         # Title
@@ -938,29 +1127,9 @@ class ApolloPage(ctk.CTkFrame):
         self.progress_bar.pack_forget()  # Hide initially
         
         # Initialize data
-        self.load_countries()
         self.load_companies()
-        
-        # No need to update dropdown since we're using a Select button now
-
-    def load_countries(self):
-        """Load available countries from database that have companies"""
-        try:
-            # Get all companies from database
-            companies = GUI_db.get_all_companies()
-            # Extract unique countries that have companies
-            countries_with_companies = set()
-            for company in companies:
-                if company.get('country'):
-                    countries_with_companies.add(company['country'])
-            
-            # Sort the countries
-            countries = ["Select Country"] + sorted(list(countries_with_companies))
-            self.country_list = countries
-            print(f"[DEBUG] Apollo countries loaded: {len(countries)} countries with companies in DB")
-        except Exception as e:
-            print(f"Error loading countries: {e}")
-            self.country_list = ["Select Country"]
+        self.load_countries()
+        self.update_company_completer()
 
     def update_company_completer(self, *args):
         """Update the company completer based on selected country"""
@@ -969,23 +1138,29 @@ class ApolloPage(ctk.CTkFrame):
             selected_country = self.country_var.get().strip()
             companies = get_all_companies()
             company_names = ["Type or select a company..."]
-            
-            
-            
             for company in companies:
                 if selected_country == "Select Country" or not selected_country or company.get('country', '').strip() == selected_country:
                     name = company.get('company_name', '')
                     if name:
                         company_names.append(name)
-            
-
-            
-            # Store the filtered companies for the selector dialog
             self.filtered_companies = company_names
-            # Reset to first option
             self.company_var.set("Type or select a company...")
         except Exception as e:
             print(f"Error updating company completer: {e}")
+
+    def load_countries(self):
+        """Load available countries from database that have companies"""
+        try:
+            companies = GUI_db.get_all_companies()
+            countries_with_companies = set()
+            for company in companies:
+                if company.get('country'):
+                    countries_with_companies.add(company['country'])
+            countries = ["Select Country"] + sorted(list(countries_with_companies))
+            self.country_list = countries
+        except Exception as e:
+            print(f"Error loading Apollo countries: {e}")
+            self.country_list = ["Select Country"]
 
     def open_country_selector(self):
         """Open a searchable country selection dialog"""
@@ -1014,7 +1189,6 @@ class ApolloPage(ctk.CTkFrame):
         """Refresh Apollo page data after new companies are added"""
         self.load_countries()
         self.load_companies()
-        print("[DEBUG] Refreshed Apollo page data")
 
     def do_search(self):
         """Perform Apollo search for decision makers"""
@@ -1786,7 +1960,13 @@ class MainApp(ctk.CTk):
                 page.lift()
             else:
                 page.lower()
+    
+    def on_closing(self):
+        """Handle app shutdown"""
+        task_manager.shutdown()
+        self.quit()
 
 if __name__ == "__main__":
     app = MainApp()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop() 
