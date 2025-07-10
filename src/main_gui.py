@@ -92,7 +92,7 @@ class HSCodePage(ctk.CTkFrame):
         style = ttk.Style()
         style.configure("Zen.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
         style.configure("Zen.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#0078D4")
-        style.map("Zen.Treeview", background=[("selected", "#EAF3FF")])
+        style.map("Zen.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
         self.table = ttk.Treeview(table_frame, columns=("hs_code", "country", "desc"), show="headings", style="Zen.Treeview")
         self.table.heading("hs_code", text="HS Code")
         self.table.heading("country", text="Country")
@@ -469,7 +469,7 @@ class ApolloPage(ctk.CTkFrame):
         style = ttk.Style()
         style.configure("Apollo.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
         style.configure("Apollo.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#2E3A59")
-        style.map("Apollo.Treeview", background=[("selected", "#EAF3FF")])
+        style.map("Apollo.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
         
         self.table = ttk.Treeview(table_frame, columns=("no", "name", "title", "email", "linkedin", "company"), show="headings", style="Apollo.Treeview")
         self.table.heading("no", text="No.")
