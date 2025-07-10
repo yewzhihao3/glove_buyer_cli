@@ -2,10 +2,13 @@ import os
 import sqlite3
 from typing import List, Dict, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'results.db')
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'database.db'))
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # Ensure the database directory exists (project root)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:  # Only create directory if there is one
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
