@@ -749,9 +749,17 @@ class ApolloSearchDialog(ctk.CTkToplevel):
         country_frame = ctk.CTkFrame(params_frame, fg_color="transparent")
         country_frame.pack(fill="x", padx=16, pady=4)
         ctk.CTkLabel(country_frame, text="Country:", font=("Poppins", 14)).pack(side="left")
-        self.country_var = tk.StringVar(value="")
-        self.country_combo = ctk.CTkComboBox(country_frame, variable=self.country_var, values=[""] + self._get_all_countries(), font=("Poppins", 14))
-        self.country_combo.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        self.country_var = tk.StringVar(value="Select Country")
+        country_display_frame = ctk.CTkFrame(country_frame, fg_color="transparent")
+        country_display_frame.pack(side="right", fill="x", expand=True, padx=(8, 0))
+        
+        # Country display (read-only)
+        self.country_display = ctk.CTkEntry(country_display_frame, textvariable=self.country_var, state="readonly", width=200, font=("Poppins", 14))
+        self.country_display.pack(side="left")
+        
+        # Select country button
+        select_country_btn = ctk.CTkButton(country_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
         
         # Search depth
         depth_frame = ctk.CTkFrame(params_frame, fg_color="transparent")
@@ -776,6 +784,15 @@ class ApolloSearchDialog(ctk.CTkToplevel):
         
         ctk.CTkButton(button_frame, text="Search", fg_color="#0078D4", text_color="#FFFFFF", font=("Poppins", 14, "bold"), command=self.start_search).pack(side="left", padx=(0, 8))
         ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        country_list = ["Select Country"] + self._get_all_countries()
+        dialog = CountrySelectorDialog(self, country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            self.country_var.set(selected_country)
 
     def _get_all_countries(self):
         """Get all available countries"""
@@ -889,6 +906,87 @@ class ApolloSearchDialog(ctk.CTkToplevel):
                 self.after(0, on_error)
         
         threading.Thread(target=run_search, daemon=True).start()
+
+
+class CountrySelectorDialog(ctk.CTkToplevel):
+    def __init__(self, parent, country_list):
+        super().__init__(parent)
+        self.title("Select Country")
+        self.geometry("500x400")
+        self.grab_set()
+        
+        self.country_list = country_list
+        self.selected_country = None
+        
+        ctk.CTkLabel(self, text="Select a country:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
+        
+        # Search frame
+        search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        search_frame.pack(fill="x", padx=24, pady=(0, 12))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search)
+        search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search countries...", font=("Poppins", 14))
+        search_entry.pack(fill="x", padx=16, pady=16)
+        
+        # Scrollable frame for countries
+        self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
+        self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        
+        # Country buttons (will be populated)
+        self.country_buttons = []
+        self.populate_countries(self.country_list)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+
+    def populate_countries(self, countries):
+        """Populate the scrollable frame with country buttons"""
+        # Clear existing buttons
+        for btn in self.country_buttons:
+            btn.destroy()
+        self.country_buttons.clear()
+        
+        # Add country buttons
+        for country in countries:
+            if country != "Select Country":
+                from utils.display import truncate_company_name
+                truncated_country = truncate_company_name(country, max_length=35)
+                btn = ctk.CTkButton(
+                    self.scroll_frame,
+                    text=truncated_country, 
+                    fg_color="#FFFFFF", 
+                    hover_color="#EAF3FF",
+                    text_color="#2E3A59", 
+                    font=("Poppins", 13),
+                    anchor="w",
+                    command=lambda c=country: self.select_country(c)
+                )
+                btn.pack(fill="x", padx=8, pady=2)
+                self.country_buttons.append(btn)
+
+    def on_search(self, *args):
+        """Filter countries based on search term"""
+        search_term = self.search_var.get().lower()
+        filtered_countries = []
+        
+        for country in self.country_list:
+            if search_term in country.lower():
+                filtered_countries.append(country)
+        
+        self.populate_countries(filtered_countries)
+
+    def select_country(self, country):
+        """Select a country and close dialog"""
+        self.selected_country = country
+        self.destroy()
+
+    def get_selected(self):
+        """Return the selected country"""
+        return self.selected_country
 
 
 class CompanySelectorDialog(ctk.CTkToplevel):
