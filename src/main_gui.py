@@ -625,6 +625,8 @@ class HSCodePage(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="#F5F7FA")
         self._build_ui()
+        # Populate table by default
+        self.populate_table()
 
     def _build_ui(self):
         # Top bar: Add HS Code button (right)
@@ -639,9 +641,17 @@ class HSCodePage(ctk.CTkFrame):
         filter_frame.pack(fill="x", pady=(18, 0), padx=32)
         ctk.CTkLabel(filter_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(0, 8))
         self.country_var = tk.StringVar(value="All")
-        countries = ["All"] + GUI_db.get_all_available_countries()
-        self.country_combo = ctk.CTkComboBox(filter_frame, variable=self.country_var, values=countries, width=160, font=("Poppins", 15))
-        self.country_combo.pack(side="left", padx=(0, 16))
+        country_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        country_frame.pack(side="left", padx=(0, 16))
+        
+        # Country display (read-only)
+        self.country_display = ctk.CTkEntry(country_frame, textvariable=self.country_var, state="readonly", width=160, font=("Poppins", 15))
+        self.country_display.pack(side="left")
+        
+        # Select country button
+        select_country_btn = ctk.CTkButton(country_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(filter_frame, text="HS Code:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(16, 8))
         self.search_var = tk.StringVar()
         search_entry = ctk.CTkEntry(filter_frame, textvariable=self.search_var, placeholder_text="Enter HS code or description...", width=220, font=("Poppins", 15))
         search_entry.pack(side="left", padx=(0, 12))
@@ -657,12 +667,12 @@ class HSCodePage(ctk.CTkFrame):
         style.configure("Zen.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
         style.configure("Zen.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#0078D4")
         style.map("Zen.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
-        self.table = ttk.Treeview(table_frame, columns=("hs_code", "country", "desc"), show="headings", style="Zen.Treeview")
-        self.table.heading("hs_code", text="HS Code")
+        self.table = ttk.Treeview(table_frame, columns=("country", "hs_code", "desc"), show="headings", style="Zen.Treeview")
         self.table.heading("country", text="Country")
+        self.table.heading("hs_code", text="HS Code")
         self.table.heading("desc", text="Description")
-        self.table.column("hs_code", width=120, anchor="center")
         self.table.column("country", width=120, anchor="center")
+        self.table.column("hs_code", width=120, anchor="center")
         self.table.column("desc", width=400, anchor="w")
         self.table.pack(fill="both", expand=True, padx=8, pady=8)
         self.populate_table()
@@ -679,6 +689,7 @@ class HSCodePage(ctk.CTkFrame):
         def load_table_data():
             country = self.country_var.get()
             query = self.search_var.get().strip().lower()
+            
             if country == "All":
                 data = GUI_db.get_all_hs_codes()
             else:
@@ -713,7 +724,7 @@ class HSCodePage(ctk.CTkFrame):
         
         # Insert new data
         for entry in data:
-            self.table.insert("", "end", iid=entry['id'], values=(entry['hs_code'], entry['country'], entry['description']))
+            self.table.insert("", "end", iid=entry['id'], values=(entry['country'], entry['hs_code'], entry['description']))
     
     def _clear_table_ui(self):
         """Clear table on main thread"""
@@ -722,6 +733,39 @@ class HSCodePage(ctk.CTkFrame):
 
     def do_search(self):
         self.populate_table()
+
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        # Get countries that have HS codes in the database
+        try:
+            hs_codes = GUI_db.get_all_hs_codes()
+            countries_with_hs_codes = set()
+            for code in hs_codes:
+                if code.get('country'):
+                    countries_with_hs_codes.add(code['country'])
+            
+            # Sort the countries and add "All" option
+            country_list = ["All"] + sorted(list(countries_with_hs_codes))
+        except Exception as e:
+            print(f"Error loading countries for HS Code Manager: {e}")
+            country_list = ["All"]
+        
+        dialog = CountrySelectorDialog(self, country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country:
+            self.country_var.set(selected_country)
+            # Refresh the table with the new country filter
+            self.populate_table()
+
+    def open_add_country_selector(self, dialog, country_var):
+        """Open a searchable country selection dialog for Add HS Code"""
+        country_list = ["Select Country"] + GUI_db.get_all_available_countries()
+        selector_dialog = CountrySelectorDialog(dialog, country_list)
+        dialog.wait_window(selector_dialog)  # Wait for dialog to close
+        selected_country = selector_dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            country_var.set(selected_country)
 
     def add_hs_code(self):
         dialog = ctk.CTkToplevel(self)
@@ -735,10 +779,13 @@ class HSCodePage(ctk.CTkFrame):
         country_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
         country_frame.pack(fill="x", padx=24, pady=8)
         ctk.CTkLabel(country_frame, text="Country:", font=("Poppins", 15)).pack(anchor="w", pady=(12, 4))
-        country_var = tk.StringVar()
-        countries = GUI_db.get_all_available_countries()
-        country_combo = ctk.CTkComboBox(country_frame, variable=country_var, values=countries, font=("Poppins", 14))
-        country_combo.pack(fill="x", pady=4)
+        country_var = tk.StringVar(value="Select Country")
+        country_display_frame = ctk.CTkFrame(country_frame, fg_color="transparent")
+        country_display_frame.pack(fill="x", pady=4)
+        country_display = ctk.CTkEntry(country_display_frame, textvariable=country_var, state="readonly", font=("Poppins", 14))
+        country_display.pack(side="left", fill="x", expand=True)
+        select_country_btn = ctk.CTkButton(country_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=lambda: self.open_add_country_selector(dialog, country_var))
+        select_country_btn.pack(side="right", padx=(8, 0))
         
         # HS Code input
         hs_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
