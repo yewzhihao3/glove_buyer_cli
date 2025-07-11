@@ -301,7 +301,7 @@ def insert_deepseek_results(hs_code: str, keyword: str, country: str, companies:
     conn.close()
     return saved_count
 
-def get_deepseek_results(hs_code: str = None, keyword: str = None, country: str = None) -> List[Dict]:
+def get_deepseek_results(hs_code: Optional[str] = None, keyword: Optional[str] = None, country: Optional[str] = None) -> List[Dict]:
     """
     Get DeepSeek buyer search results with optional filters
     """
@@ -329,4 +329,120 @@ def get_deepseek_results(hs_code: str = None, keyword: str = None, country: str 
     conn.close()
     
     columns = ['id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+    return [dict(zip(columns, row)) for row in rows]
+
+def get_all_deepseek_results() -> List[Dict]:
+    """Get all DeepSeek buyer search results"""
+    return get_deepseek_results()
+
+def get_deepseek_result_by_id(record_id: int) -> Optional[Dict]:
+    """Get a specific DeepSeek result by ID"""
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT * FROM deepseek_buyer_search_results WHERE id = ?', (record_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        columns = ['id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
+        return dict(zip(columns, row))
+    return None
+
+def update_deepseek_result(record_id: int, updated_fields: dict) -> bool:
+    """
+    Update a DeepSeek result by its ID. updated_fields is a dict of column:value pairs to update.
+    Returns True if a record was updated, False otherwise.
+    """
+    allowed_fields = {'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source'}
+    set_clause = ', '.join([f"{k} = ?" for k in updated_fields if k in allowed_fields])
+    values = [updated_fields[k] for k in updated_fields if k in allowed_fields]
+    if not set_clause:
+        return False
+    values.append(record_id)
+    
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f'UPDATE deepseek_buyer_search_results SET {set_clause} WHERE id = ?', values)
+    conn.commit()
+    updated = c.rowcount > 0
+    conn.close()
+    return updated
+
+def delete_deepseek_result(record_id: int) -> bool:
+    """Delete a DeepSeek result by its ID. Returns True if deleted, False otherwise."""
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM deepseek_buyer_search_results WHERE id = ?', (record_id,))
+    conn.commit()
+    deleted = c.rowcount > 0
+    conn.close()
+    return deleted
+
+def get_deepseek_results_by_search(search_term: Optional[str] = None) -> List[Dict]:
+    """
+    Get DeepSeek results filtered by search term (searches in company_name, description, hs_code, keyword)
+    """
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    if search_term:
+        search_pattern = f'%{search_term}%'
+        c.execute('''
+            SELECT * FROM deepseek_buyer_search_results 
+            WHERE company_name LIKE ? OR description LIKE ? OR hs_code LIKE ? OR keyword LIKE ?
+            ORDER BY created_at DESC
+        ''', (search_pattern, search_pattern, search_pattern, search_pattern))
+    else:
+        c.execute('SELECT * FROM deepseek_buyer_search_results ORDER BY created_at DESC')
+    
+    rows = c.fetchall()
+    conn.close()
+    
+    columns = ['id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows] 
+
+def update_contact(contact_id, updated_fields):
+    """Update a contact by id. updated_fields is a dict of column:value."""
+    allowed_fields = {'name', 'title', 'email', 'linkedin', 'company_name'}
+    set_clause = ', '.join([f"{k} = ?" for k in updated_fields if k in allowed_fields])
+    values = [updated_fields[k] for k in updated_fields if k in allowed_fields]
+    if not set_clause:
+        print(f"[DEBUG] No valid fields to update for contact_id={contact_id}.")
+        return False
+    values.append(contact_id)
+    sql = f'UPDATE contacts SET {set_clause} WHERE id = ?'
+    print(f"[DEBUG] Executing SQL: {sql}")
+    print(f"[DEBUG] With values: {values}")
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute(sql, values)
+        conn.commit()
+        updated = c.rowcount > 0
+        print(f"[DEBUG] Rows updated: {c.rowcount}")
+    except Exception as e:
+        print(f"[DEBUG][ERROR] Exception during update_contact: {e}")
+        updated = False
+    conn.close()
+    return updated
+
+def delete_contact(contact_id):
+    """Delete a contact by id."""
+    sql = 'DELETE FROM contacts WHERE id = ?'
+    print(f"[DEBUG] Executing SQL: {sql}")
+    print(f"[DEBUG] With contact_id: {contact_id}")
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute(sql, (contact_id,))
+        conn.commit()
+        deleted = c.rowcount > 0
+        print(f"[DEBUG] Rows deleted: {c.rowcount}")
+    except Exception as e:
+        print(f"[DEBUG][ERROR] Exception during delete_contact: {e}")
+        deleted = False
+    conn.close()
+    return deleted 

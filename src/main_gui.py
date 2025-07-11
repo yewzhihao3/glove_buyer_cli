@@ -11,6 +11,9 @@ import db  # Add this import at the top if not present
 from concurrent.futures import ThreadPoolExecutor
 import queue
 import time
+import db_apollo
+from datetime import datetime, timedelta
+from collections import defaultdict, Counter
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
@@ -110,8 +113,9 @@ def run_in_background(func, callback=None, error_callback=None, *args, **kwargs)
 NAV_LABELS = [
     "Dashboard",
     "Quick Buyer Search (AI)",
+    "AI Buyer Results",
     "Verified Buyer Leads (Apollo)",
-    "Buyer List",
+    "Buyer List (Apollo)",
     "HS Code",
     "Export",
     "Settings"
@@ -256,18 +260,31 @@ class BuyerSearchPage(ctk.CTkFrame):
         style.configure("BuyerSearch.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#2E3A59")
         style.map("BuyerSearch.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
         
-        self.table = ttk.Treeview(table_frame, columns=("no", "company", "country", "website", "description"), show="headings", style="BuyerSearch.Treeview")
+        # Add horizontal scrollbar
+        xscroll = tk.Scrollbar(table_frame, orient="horizontal")
+        xscroll.pack(side="bottom", fill="x")
+        
+        self.table = ttk.Treeview(
+            table_frame,
+            columns=("no", "company", "country", "search_country", "website", "description"),
+            show="headings",
+            style="BuyerSearch.Treeview",
+            xscrollcommand=xscroll.set
+        )
         self.table.heading("no", text="No.")
         self.table.heading("company", text="Company Name")
         self.table.heading("country", text="Country")
+        self.table.heading("search_country", text="Search Country")
         self.table.heading("website", text="Website")
         self.table.heading("description", text="Description")
         self.table.column("no", width=60, anchor="center")
         self.table.column("company", width=200, anchor="w")
         self.table.column("country", width=120, anchor="center")
+        self.table.column("search_country", width=140, anchor="center")
         self.table.column("website", width=200, anchor="w")
         self.table.column("description", width=300, anchor="w")
         self.table.pack(fill="both", expand=True, padx=8, pady=8)
+        xscroll.config(command=self.table.xview)
         
         # Progress bar
         self.progress_bar = ctk.CTkProgressBar(results_content, orientation="horizontal", mode="indeterminate", width=320)
@@ -360,7 +377,7 @@ class BuyerSearchPage(ctk.CTkFrame):
         loading_dialog.title("Loading")
         loading_dialog.geometry("300x100")
         loading_dialog.grab_set()
-        loading_dialog.transient(self)
+        loading_dialog.transient(self.winfo_toplevel())
         
         ctk.CTkLabel(loading_dialog, text="Loading HS codes...", font=("Poppins", 14)).pack(pady=20)
         progress_bar = ctk.CTkProgressBar(loading_dialog, mode="indeterminate")
@@ -449,6 +466,19 @@ class BuyerSearchPage(ctk.CTkFrame):
         cache.invalidate("buyer_search_countries")
         cache.invalidate("hs_codes")
         self.load_countries()
+    
+    def refresh_ai_buyer_results_page(self):
+        """Refresh AI Buyer Results page after new DeepSeek results are added"""
+        try:
+            # Find the main app instance to access other pages
+            main_app = self.winfo_toplevel()
+            if hasattr(main_app, 'pages'):
+                # Refresh AI Buyer Results page (index 2)
+                ai_buyer_results_page = main_app.pages[2]  # Index 2 is DeepSeekBuyerResultsPage
+                if hasattr(ai_buyer_results_page, 'refresh_country_list'):
+                    ai_buyer_results_page.refresh_country_list()
+        except Exception as e:
+            print(f"Error refreshing AI Buyer Results page: {e}")
 
     def perform_search(self):
         """Perform AI buyer search"""
@@ -541,6 +571,9 @@ class BuyerSearchPage(ctk.CTkFrame):
                     # Auto-refresh country list after successful search
                     self.load_countries()
                     
+                    # Refresh AI Buyer Results page if it exists
+                    self.refresh_ai_buyer_results_page()
+                    
                     messagebox.showinfo("Search Complete", f"Found and saved {len(companies)} potential buyers to the database.")
                 
                 self.after(0, on_complete)
@@ -564,12 +597,13 @@ class BuyerSearchPage(ctk.CTkFrame):
         """Populate the results table"""
         for row in self.table.get_children():
             self.table.delete(row)
-        
+        search_country = self.country_var.get()
         for i, company in enumerate(data):
             self.table.insert("", "end", values=(
                 str(i + 1),
                 company.get('company_name', ''),
                 company.get('company_country', ''),
+                search_country,
                 company.get('company_website_link', ''),
                 company.get('description', '')
             ))
@@ -616,10 +650,1107 @@ class BuyerSearchPage(ctk.CTkFrame):
             messagebox.showerror("Export Error", f"Error exporting results: {e}")
 
 
-class WorkInProgress(ctk.CTkFrame):
-    def __init__(self, master, label):
+class DeepSeekBuyerResultsPage(ctk.CTkFrame):
+    def __init__(self, master):
         super().__init__(master, fg_color="#F5F7FA")
-        ctk.CTkLabel(self, text=f"🚧 {label} - Work in Progress 🚧", font=("Poppins", 24, "bold"), text_color="#0078D4").pack(expand=True, pady=80)
+        self._build_ui()
+        self.load_countries()
+        self.populate_table()
+
+    def _build_ui(self):
+        # Title
+        title_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        title_frame.pack(fill="x", pady=(24, 16), padx=32)
+        ctk.CTkLabel(title_frame, text="AI Buyer Results (DeepSeek)", font=("Poppins", 24, "bold"), text_color="#2E3A59").pack(side="left")
+        
+        # Search/filter row
+        filter_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        filter_frame.pack(fill="x", pady=(18, 0), padx=32)
+        
+        ctk.CTkLabel(filter_frame, text="Search:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(0, 8))
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search_change)
+        search_entry = ctk.CTkEntry(filter_frame, textvariable=self.search_var, placeholder_text="Search companies, descriptions, HS codes...", width=300, font=("Poppins", 15))
+        search_entry.pack(side="left", padx=(0, 12))
+        
+        ctk.CTkLabel(filter_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(16, 8))
+        self.country_var = tk.StringVar(value="All")
+        country_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        country_frame.pack(side="left", padx=(0, 12))
+        
+        # Country display (read-only)
+        self.country_display = ctk.CTkEntry(country_frame, textvariable=self.country_var, state="readonly", width=160, font=("Poppins", 15))
+        self.country_display.pack(side="left")
+        
+        # Select country button
+        select_country_btn = ctk.CTkButton(country_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
+        
+        refresh_btn = ctk.CTkButton(filter_frame, text="Refresh", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=100, command=self.populate_table)
+        refresh_btn.pack(side="left", padx=(0, 8))
+        
+        clear_btn = ctk.CTkButton(filter_frame, text="Clear Search", fg_color="#B0BEC5", hover_color="#90A4AE", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=120, command=self.clear_search)
+        clear_btn.pack(side="left")
+
+        # Table frame
+        table_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
+        table_frame.pack(fill="both", expand=True, padx=32, pady=(18, 0))
+        
+        style = ttk.Style()
+        style.configure("DeepSeek.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
+        style.configure("DeepSeek.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#0078D4")
+        style.map("DeepSeek.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
+        
+        self.table = ttk.Treeview(table_frame, columns=("id", "hs_code", "keyword", "search_country", "company_name", "company_country", "website", "description"), show="headings", style="DeepSeek.Treeview")
+        self.table.heading("id", text="ID")
+        self.table.heading("hs_code", text="HS Code")
+        self.table.heading("keyword", text="Keyword")
+        self.table.heading("search_country", text="Search Country")
+        self.table.heading("company_name", text="Company Name")
+        self.table.heading("company_country", text="Company Country")
+        self.table.heading("website", text="Website")
+        self.table.heading("description", text="Description")
+        
+        self.table.column("id", width=60, anchor="center")
+        self.table.column("hs_code", width=100, anchor="center")
+        self.table.column("keyword", width=120, anchor="w")
+        self.table.column("search_country", width=120, anchor="center")
+        self.table.column("company_name", width=250, anchor="w")
+        self.table.column("company_country", width=120, anchor="center")
+        self.table.column("website", width=200, anchor="w")
+        self.table.column("description", width=300, anchor="w")
+        
+        self.table.pack(fill="both", expand=True, padx=8, pady=8)
+        self._add_table_sorting()
+
+        # Action buttons below table
+        action_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        action_frame.pack(fill="x", padx=32, pady=(8, 24))
+        
+        export_btn = ctk.CTkButton(action_frame, text="Export Results", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8, width=150, command=self.export_results)
+        export_btn.pack(side="right", padx=(0, 12))
+        
+        edit_btn = ctk.CTkButton(action_frame, text="Edit Selected", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=140, command=self.edit_selected)
+        edit_btn.pack(side="right", padx=(0, 12))
+        
+        delete_btn = ctk.CTkButton(action_frame, text="Delete Selected", fg_color="#F44336", hover_color="#D32F2F", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=140, command=self.delete_selected)
+        delete_btn.pack(side="right", padx=(0, 12))
+
+    def populate_table(self):
+        """Populate the table with DeepSeek results, sorted by ID ascending by default"""
+        def load_table_data():
+            search_term = self.search_var.get().strip()
+            selected_country = self.country_var.get().strip()
+            # Get all results first
+            if search_term:
+                results = GUI_db.get_deepseek_results_by_search(search_term)
+            else:
+                results = GUI_db.get_all_deepseek_results()
+            # Filter by country if not "All"
+            if selected_country and selected_country != "All":
+                filtered_results = []
+                for result in results:
+                    if result.get('company_country', '').strip() == selected_country:
+                        filtered_results.append(result)
+                results = filtered_results
+            # Sort by id ascending
+            results = sorted(results, key=lambda x: x.get('id', 0))
+            return results
+        def on_data_loaded(data):
+            self.after(0, lambda: self._update_table_ui(data))
+            # Also refresh country list to include any new countries
+            self.after(0, lambda: self.refresh_country_list())
+        def on_error(error):
+            print(f"Error loading DeepSeek results: {error}")
+            self.after(0, lambda: self._clear_table_ui())
+        run_in_background(load_table_data, on_data_loaded, on_error)
+
+    def _add_table_sorting(self):
+        """Enable sorting by clicking column headers"""
+        for col in self.table['columns']:
+            self.table.heading(col, command=lambda c=col: self._sort_by_column(c, False))
+
+    def _sort_by_column(self, col, descending):
+        data = [(self.table.set(child, col), child) for child in self.table.get_children('')]
+        # Try to convert to int for id column
+        if col == 'id':
+            def sort_key(item):
+                try:
+                    return int(item[0]) if str(item[0]).isdigit() else 0
+                except (ValueError, AttributeError):
+                    return 0
+            data.sort(key=sort_key, reverse=descending)
+        else:
+            data.sort(reverse=descending)
+        for index, (val, child) in enumerate(data):
+            self.table.move(child, '', index)
+        # Reverse sort next time
+        self.table.heading(col, command=lambda: self._sort_by_column(col, not descending))
+
+    def refresh_country_list(self):
+        """Refresh the country list from database"""
+        self.load_countries()
+    
+    def _update_table_ui(self, data):
+        """Update table on main thread"""
+        for row in self.table.get_children():
+            self.table.delete(row)
+        
+        for entry in data:
+            # Truncate description for display
+            description = entry.get('description', '')
+            if len(description) > 60:
+                description = description[:57] + "..."
+            
+            self.table.insert("", "end", iid=entry['id'], values=(
+                entry['id'],
+                entry.get('hs_code', ''),
+                entry.get('keyword', ''),
+                entry.get('country', ''),
+                entry.get('company_name', ''),
+                entry.get('company_country', ''),
+                entry.get('company_website_link', ''),
+                description
+            ))
+    
+    def _clear_table_ui(self):
+        """Clear table on main thread"""
+        for row in self.table.get_children():
+            self.table.delete(row)
+
+    def on_search_change(self, *args):
+        """Handle search input changes"""
+        self.populate_table()
+
+    def clear_search(self):
+        """Clear search and refresh table"""
+        self.search_var.set("")
+        self.populate_table()
+
+    def load_countries(self):
+        """Load available countries from database that have DeepSeek results"""
+        try:
+            results = GUI_db.get_all_deepseek_results()
+            countries_with_results = set()
+            for result in results:
+                if result.get('company_country'):
+                    countries_with_results.add(result['company_country'])
+            countries = ["All"] + sorted(list(countries_with_results))
+            self.country_list = countries
+        except Exception as e:
+            print(f"Error loading DeepSeek countries: {e}")
+            self.country_list = ["All"]
+
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        dialog = CountrySelectorDialog(self, self.country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country:
+            self.country_var.set(selected_country)
+            # Refresh the table with the new country filter
+            self.populate_table()
+
+    def edit_selected(self):
+        """Edit the selected record"""
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showwarning("Edit Record", "Please select a row to edit.")
+            return
+        
+        record_id = int(selected[0])
+        record = GUI_db.get_deepseek_result_by_id(record_id)
+        if not record:
+            messagebox.showerror("Not Found", "Selected record not found.")
+            return
+        
+        self.open_edit_dialog(record)
+
+    def open_edit_dialog(self, record):
+        """Open edit dialog for a record"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Edit AI Buyer Result")
+        dialog.geometry("800x600")
+        dialog.grab_set()
+        dialog.transient(self.winfo_toplevel())
+        
+        ctk.CTkLabel(dialog, text="Edit AI Buyer Result", font=("Poppins", 20, "bold"), text_color="#2E3A59").pack(pady=(20, 16))
+        
+        # Form fields
+        form_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
+        form_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
+        
+        # HS Code
+        ctk.CTkLabel(form_frame, text="HS Code:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(16, 4))
+        hs_var = tk.StringVar(value=record.get('hs_code', ''))
+        hs_entry = ctk.CTkEntry(form_frame, textvariable=hs_var, font=("Poppins", 14))
+        hs_entry.pack(fill="x", padx=16, pady=(0, 12))
+        
+        # Company Name
+        ctk.CTkLabel(form_frame, text="Company Name:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        company_name_var = tk.StringVar(value=record.get('company_name', ''))
+        company_name_entry = ctk.CTkEntry(form_frame, textvariable=company_name_var, font=("Poppins", 14))
+        company_name_entry.pack(fill="x", padx=16, pady=(0, 12))
+        
+        # Company Country
+        ctk.CTkLabel(form_frame, text="Company Country:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        company_country_var = tk.StringVar(value=record.get('company_country', ''))
+        company_country_entry = ctk.CTkEntry(form_frame, textvariable=company_country_var, font=("Poppins", 14))
+        company_country_entry.pack(fill="x", padx=16, pady=(0, 12))
+        
+        # Website
+        ctk.CTkLabel(form_frame, text="Website:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        website_var = tk.StringVar(value=record.get('company_website_link', ''))
+        website_entry = ctk.CTkEntry(form_frame, textvariable=website_var, font=("Poppins", 14))
+        website_entry.pack(fill="x", padx=16, pady=(0, 12))
+        
+        # Description
+        ctk.CTkLabel(form_frame, text="Description:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        desc_border_frame = ctk.CTkFrame(form_frame, fg_color="#B0BEC5", corner_radius=6)
+        desc_border_frame.pack(fill="x", padx=16, pady=(0, 12))
+        desc_text = ctk.CTkTextbox(desc_border_frame, height=60, font=("Poppins", 14), fg_color="#FFFFFF", border_width=0)
+        desc_text.pack(fill="both", expand=True, padx=2, pady=2)
+        desc_text.insert("1.0", record.get('description', ''))
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        
+        def on_save():
+            updated_fields = {
+                'hs_code': hs_var.get().strip(),
+                'company_name': company_name_var.get().strip(),
+                'company_country': company_country_var.get().strip(),
+                'company_website_link': website_var.get().strip(),
+                'description': desc_text.get("1.0", "end-1c").strip()
+            }
+            
+            if not updated_fields['hs_code'] or not updated_fields['company_name']:
+                messagebox.showwarning("Missing Data", "Please fill in HS Code and Company Name.")
+                return
+            
+            if GUI_db.update_deepseek_result(record['id'], updated_fields):
+                dialog.destroy()
+                self.populate_table()
+                messagebox.showinfo("Success", "Record updated successfully.")
+            else:
+                messagebox.showerror("Error", "Failed to update record.")
+        
+        ctk.CTkButton(button_frame, text="Save", fg_color="#0078D4", text_color="#FFFFFF", font=("Poppins", 15, "bold"), command=on_save).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 15), command=dialog.destroy).pack(side="right")
+
+    def delete_selected(self):
+        """Delete the selected record"""
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showwarning("Delete Record", "Please select a row to delete.")
+            return
+        
+        record_id = int(selected[0])
+        if messagebox.askyesno("Delete Record", "Are you sure you want to delete this record?"):
+            if GUI_db.delete_deepseek_result(record_id):
+                self.populate_table()
+                messagebox.showinfo("Success", "Record deleted successfully.")
+            else:
+                messagebox.showerror("Error", "Failed to delete record.")
+
+    def export_results(self):
+        """Export results to CSV"""
+        try:
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                title="Export AI Buyer Results",
+                initialfile="ai_buyer_results.csv"
+            )
+            
+            if filename:
+                results = GUI_db.get_all_deepseek_results()
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    # Write headers
+                    headers = ["ID", "HS Code", "Keyword", "Company Name", "Company Country", "Website", "Description"]
+                    writer.writerow(headers)
+                    
+                    # Write data
+                    for result in results:
+                        writer.writerow([
+                            result.get('id', ''),
+                            result.get('hs_code', ''),
+                            result.get('keyword', ''),
+                            result.get('company_name', ''),
+                            result.get('company_country', ''),
+                            result.get('company_website_link', ''),
+                            result.get('description', '')
+                        ])
+                
+                messagebox.showinfo("Export Complete", f"Results exported to {filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Error exporting results: {e}")
+
+
+class ExportPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color="#F5F7FA")
+        # Use a scrollable frame for all content
+        self.scrollable = ctk.CTkScrollableFrame(self, fg_color="#F5F7FA")
+        self.scrollable.pack(fill="both", expand=True)
+        self._build_ui(self.scrollable)
+        self.load_data_counts()
+
+    def _build_ui(self, parent):
+        # Title
+        title_frame = ctk.CTkFrame(parent, fg_color="#F5F7FA")
+        title_frame.pack(fill="x", pady=(24, 16), padx=32)
+        ctk.CTkLabel(title_frame, text="📊 Data Export Center", font=("Poppins", 24, "bold"), text_color="#2E3A59").pack(side="left")
+        
+        # Data Overview Cards
+        overview_frame = ctk.CTkFrame(parent, fg_color="#F5F7FA")
+        overview_frame.pack(fill="x", pady=(0, 16), padx=32)
+        overview_frame.grid_columnconfigure((0,1,2,3), weight=1)
+        
+        # AI Buyer Results Card
+        ai_card = ctk.CTkFrame(overview_frame, fg_color="#FFFFFF", corner_radius=12)
+        ai_card.grid(row=0, column=0, padx=8, pady=8, sticky="ew")
+        ctk.CTkLabel(ai_card, text="🤖 AI Buyer Results", font=("Poppins", 16, "bold"), text_color="#0078D4").pack(pady=(16, 8))
+        self.ai_count_label = ctk.CTkLabel(ai_card, text="Loading...", font=("Poppins", 20, "bold"), text_color="#2E3A59")
+        self.ai_count_label.pack(pady=(0, 16))
+        
+        # Apollo Buyer List Card
+        apollo_card = ctk.CTkFrame(overview_frame, fg_color="#FFFFFF", corner_radius=12)
+        apollo_card.grid(row=0, column=1, padx=8, pady=8, sticky="ew")
+        ctk.CTkLabel(apollo_card, text="👥 Apollo Buyer List", font=("Poppins", 16, "bold"), text_color="#4CAF50").pack(pady=(16, 8))
+        self.apollo_count_label = ctk.CTkLabel(apollo_card, text="Loading...", font=("Poppins", 20, "bold"), text_color="#2E3A59")
+        self.apollo_count_label.pack(pady=(0, 16))
+        
+        # HS Codes Card
+        hs_card = ctk.CTkFrame(overview_frame, fg_color="#FFFFFF", corner_radius=12)
+        hs_card.grid(row=0, column=2, padx=8, pady=8, sticky="ew")
+        ctk.CTkLabel(hs_card, text="🏷️ HS Codes", font=("Poppins", 16, "bold"), text_color="#FF9800").pack(pady=(16, 8))
+        self.hs_count_label = ctk.CTkLabel(hs_card, text="Loading...", font=("Poppins", 20, "bold"), text_color="#2E3A59")
+        self.hs_count_label.pack(pady=(0, 16))
+        
+        # Companies Card
+        company_card = ctk.CTkFrame(overview_frame, fg_color="#FFFFFF", corner_radius=12)
+        company_card.grid(row=0, column=3, padx=8, pady=8, sticky="ew")
+        ctk.CTkLabel(company_card, text="🏢 Companies", font=("Poppins", 16, "bold"), text_color="#9C27B0").pack(pady=(16, 8))
+        self.company_count_label = ctk.CTkLabel(company_card, text="Loading...", font=("Poppins", 20, "bold"), text_color="#2E3A59")
+        self.company_count_label.pack(pady=(0, 16))
+        
+        # Export Configuration
+        config_frame = ctk.CTkFrame(parent, fg_color="#FFFFFF", corner_radius=16)
+        config_frame.pack(fill="x", padx=32, pady=(0, 16))
+        
+        config_content = ctk.CTkFrame(config_frame, fg_color="transparent")
+        config_content.pack(fill="x", padx=20, pady=18)
+        
+        ctk.CTkLabel(config_content, text="Export Configuration", font=("Poppins", 18, "bold"), text_color="#0078D4").pack(anchor="w", pady=(0, 16))
+        
+        # Initialize variables for quick export templates
+        self.ai_var = tk.BooleanVar(value=False)
+        self.apollo_var = tk.BooleanVar(value=False)
+        self.hs_var = tk.BooleanVar(value=False)
+        self.company_var = tk.BooleanVar(value=False)
+        
+        # Export Options
+        options_frame = ctk.CTkFrame(config_content, fg_color="#F5F7FA", corner_radius=8)
+        options_frame.pack(fill="x", pady=(0, 16))
+        
+        ctk.CTkLabel(options_frame, text="Export Options:", font=("Poppins", 15, "bold"), text_color="#2E3A59").pack(anchor="w", padx=16, pady=(12, 8))
+        
+        options_grid = ctk.CTkFrame(options_frame, fg_color="transparent")
+        options_grid.pack(fill="x", padx=16, pady=(0, 12))
+        options_grid.grid_columnconfigure((0,1,2), weight=1)
+        
+        # Format Selection
+        ctk.CTkLabel(options_grid, text="Format:", font=("Poppins", 14)).grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        self.format_var = tk.StringVar(value="CSV")
+        format_combo = ctk.CTkComboBox(options_grid, variable=self.format_var, values=["CSV", "Excel"], font=("Poppins", 14))
+        format_combo.grid(row=0, column=1, sticky="w", padx=8, pady=4)
+        
+        # Include Headers
+        self.headers_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(options_grid, text="Include Headers", variable=self.headers_var, font=("Poppins", 14)).grid(row=0, column=2, sticky="w", padx=8, pady=4)
+        
+        # Initialize filter variables (not used in simplified version)
+        self.country_var = tk.StringVar(value="All")
+        self.date_var = tk.StringVar(value="All Time")
+        
+        # Action Buttons
+        button_frame = ctk.CTkFrame(config_content, fg_color="transparent")
+        button_frame.pack(fill="x", pady=(16, 0))
+        
+        # Quick Export Templates
+        templates_frame = ctk.CTkFrame(button_frame, fg_color="#F5F7FA", corner_radius=8)
+        templates_frame.pack(fill="x", pady=(0, 16))
+        
+        ctk.CTkLabel(templates_frame, text="Quick Export Templates:", font=("Poppins", 15, "bold"), text_color="#2E3A59").pack(anchor="w", padx=16, pady=(12, 8))
+        
+        templates_grid = ctk.CTkFrame(templates_frame, fg_color="transparent")
+        templates_grid.pack(fill="x", padx=16, pady=(0, 12))
+        templates_grid.grid_columnconfigure((0,1,2), weight=1)
+        
+        ctk.CTkButton(templates_grid, text="🤖 AI Buyer Results", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), command=self.export_sales_report).grid(row=0, column=0, padx=8, pady=4, sticky="ew")
+        ctk.CTkButton(templates_grid, text="📋 HS Codes", fg_color="#FF9800", hover_color="#F57C00", text_color="#FFFFFF", font=("Poppins", 12, "bold"), command=self.export_market_analysis).grid(row=0, column=1, padx=8, pady=4, sticky="ew")
+        ctk.CTkButton(templates_grid, text="👥 Apollo Buyer List", fg_color="#9C27B0", hover_color="#7B1FA2", text_color="#FFFFFF", font=("Poppins", 12, "bold"), command=self.export_lead_list).grid(row=0, column=2, padx=8, pady=4, sticky="ew")
+        
+
+        
+        # Progress Bar
+        self.progress_bar = ctk.CTkProgressBar(button_frame, orientation="horizontal", mode="determinate", width=400)
+        self.progress_bar.pack(pady=8)
+        self.progress_bar.set(0)
+        self.progress_bar.pack_forget()
+        
+        # Status Label
+        self.status_label = ctk.CTkLabel(button_frame, text="", font=("Poppins", 14), text_color="#6B7C93")
+        self.status_label.pack(pady=4)
+
+    def load_data_counts(self):
+        """Load and display data counts for each source"""
+        def load_counts():
+            try:
+                # AI Buyer Results count
+                ai_count = len(GUI_db.get_all_deepseek_results())
+                
+                # Apollo Buyer List count
+                apollo_count = len(GUI_db.get_all_contacts())
+                
+                # HS Codes count
+                hs_count = len(GUI_db.get_all_hs_codes())
+                
+                # Companies count
+                company_count = len(GUI_db.get_all_companies())
+                
+                # Get unique countries for filter
+                countries = set()
+                for result in GUI_db.get_all_deepseek_results():
+                    if result.get('company_country'):
+                        countries.add(result['company_country'])
+                for contact in GUI_db.get_all_contacts():
+                    if contact.get('company_name'):
+                        # Extract country from company name or use a default
+                        countries.add("Unknown")
+                for hs_code in GUI_db.get_all_hs_codes():
+                    if hs_code.get('country'):
+                        countries.add(hs_code['country'])
+                
+                return {
+                    'ai_count': ai_count,
+                    'apollo_count': apollo_count,
+                    'hs_count': hs_count,
+                    'company_count': company_count,
+                    'countries': sorted(list(countries))
+                }
+            except Exception as e:
+                print(f"Error loading data counts: {e}")
+                return {
+                    'ai_count': 0,
+                    'apollo_count': 0,
+                    'hs_count': 0,
+                    'company_count': 0,
+                    'countries': ["All"]
+                }
+        
+        def on_counts_loaded(counts):
+            self.after(0, lambda: self._update_counts_ui(counts))
+        
+        def on_error(error):
+            print(f"Error loading counts: {error}")
+            self.after(0, lambda: self._update_counts_ui({
+                'ai_count': 0,
+                'apollo_count': 0,
+                'hs_count': 0,
+                'company_count': 0,
+                'countries': ["All"]
+            }))
+        
+        run_in_background(load_counts, on_counts_loaded, on_error)
+
+    def _update_counts_ui(self, counts):
+        """Update the count labels on main thread"""
+        self.ai_count_label.configure(text=str(counts['ai_count']))
+        self.apollo_count_label.configure(text=str(counts['apollo_count']))
+        self.hs_count_label.configure(text=str(counts['hs_count']))
+        self.company_count_label.configure(text=str(counts['company_count']))
+
+    def export_sales_report(self):
+        """Export AI Buyer Results table"""
+        self.ai_var.set(True)
+        self.apollo_var.set(False)
+        self.company_var.set(False)
+        self.hs_var.set(False)
+        self.format_var.set("Excel")
+        self.export_data()
+
+    def export_market_analysis(self):
+        """Export HS Codes table"""
+        self.ai_var.set(False)
+        self.hs_var.set(True)
+        self.company_var.set(False)
+        self.apollo_var.set(False)
+        self.format_var.set("Excel")
+        self.export_data()
+
+    def export_lead_list(self):
+        """Export Apollo Buyer List table"""
+        self.apollo_var.set(True)
+        self.ai_var.set(False)
+        self.company_var.set(False)
+        self.hs_var.set(False)
+        self.format_var.set("CSV")
+        self.export_data()
+
+    def export_data(self):
+        """Main export function"""
+        # Check if any data source is selected
+        if not any([self.ai_var.get(), self.apollo_var.get(), self.hs_var.get(), self.company_var.get()]):
+            messagebox.showwarning("No Data Selected", "Please use one of the quick export templates.")
+            return
+        
+        # Show progress bar
+        self.progress_bar.pack(pady=8)
+        self.progress_bar.set(0)
+        self.status_label.configure(text="Preparing export...")
+        
+        def run_export():
+            try:
+                import csv
+                from datetime import datetime, timedelta
+                
+                # Get filter values
+                selected_country = self.country_var.get()
+                date_filter = self.date_var.get()
+                export_format = self.format_var.get()
+                include_headers = self.headers_var.get()
+                
+                # Calculate date range
+                end_date = datetime.now()
+                if date_filter == "Last 7 Days":
+                    start_date = end_date - timedelta(days=7)
+                elif date_filter == "Last 30 Days":
+                    start_date = end_date - timedelta(days=30)
+                elif date_filter == "Last 90 Days":
+                    start_date = end_date - timedelta(days=90)
+                else:
+                    start_date = None
+                
+                # Generate filename
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                if export_format == "CSV":
+                    filename = f"buyer_intelligence_export_{timestamp}.csv"
+                else:
+                    filename = f"buyer_intelligence_export_{timestamp}.xlsx"
+                
+                # Get file path
+                file_path = filedialog.asksaveasfilename(
+                    defaultextension=f".{export_format.lower()}",
+                    filetypes=[(f"{export_format} files", f"*.{export_format.lower()}"), ("All files", "*.*")],
+                    title="Save Export File",
+                    initialfile=filename
+                )
+                
+                if not file_path:
+                    return
+                
+                # Collect and enrich data based on selections
+                all_data = {}
+                
+                # Load all data first for cross-referencing
+                ai_data = []
+                apollo_data = []
+                company_data = []
+                hs_data = []
+                
+                if self.ai_var.get():
+                    self.after(0, lambda: self.status_label.configure(text="Loading AI Buyer Results..."))
+                    self.after(0, lambda: self.progress_bar.set(0.1))
+                    
+                    ai_data = GUI_db.get_all_deepseek_results()
+                    if selected_country != "All":
+                        ai_data = [r for r in ai_data if r.get('company_country') == selected_country]
+                    if start_date:
+                        ai_data = [r for r in ai_data if self._parse_date(r.get('created_at', '')) >= start_date]
+                
+                if self.apollo_var.get():
+                    self.after(0, lambda: self.status_label.configure(text="Loading Apollo Buyer List..."))
+                    self.after(0, lambda: self.progress_bar.set(0.2))
+                    
+                    apollo_data = GUI_db.get_all_contacts()
+                    if selected_country != "All":
+                        apollo_data = [c for c in apollo_data if self._get_contact_country(c) == selected_country]
+                    if start_date:
+                        apollo_data = [c for c in apollo_data if self._parse_date(c.get('created_at', '')) >= start_date]
+                
+                if self.hs_var.get():
+                    self.after(0, lambda: self.status_label.configure(text="Loading HS Codes..."))
+                    self.after(0, lambda: self.progress_bar.set(0.3))
+                    
+                    hs_data = GUI_db.get_all_hs_codes()
+                    if selected_country != "All":
+                        hs_data = [h for h in hs_data if h.get('country') == selected_country]
+                    if start_date:
+                        hs_data = [h for h in hs_data if self._parse_date(h.get('created_at', '')) >= start_date]
+                
+                if self.company_var.get():
+                    self.after(0, lambda: self.status_label.configure(text="Loading Companies..."))
+                    self.after(0, lambda: self.progress_bar.set(0.4))
+                    
+                    company_data = GUI_db.get_all_companies()
+                    if selected_country != "All":
+                        company_data = [c for c in company_data if c.get('country') == selected_country]
+                    if start_date:
+                        company_data = [c for c in company_data if self._parse_date(c.get('created_at', '')) >= start_date]
+                
+                # Export raw data tables
+                self.after(0, lambda: self.status_label.configure(text="Preparing export..."))
+                self.after(0, lambda: self.progress_bar.set(0.5))
+                
+                # Export selected tables
+                if self.ai_var.get():
+                    all_data['AI Buyer Results'] = ai_data
+                if self.apollo_var.get():
+                    all_data['Apollo Buyer List'] = apollo_data
+                if self.hs_var.get():
+                    all_data['HS Codes'] = hs_data
+                if self.company_var.get():
+                    all_data['Companies'] = company_data
+                
+                # Export based on format
+                self.after(0, lambda: self.status_label.configure(text="Exporting data..."))
+                self.after(0, lambda: self.progress_bar.set(0.9))
+                
+                if export_format == "CSV":
+                    self._export_to_csv(file_path, all_data, include_headers)
+                else:
+                    self._export_to_excel(file_path, all_data, include_headers)
+                
+                self.after(0, lambda: self.progress_bar.set(1.0))
+                self.after(0, lambda: self.status_label.configure(text="Export completed successfully!"))
+                self.after(0, lambda: messagebox.showinfo("Export Complete", f"Data exported successfully to:\n{file_path}"))
+                
+            except Exception as e:
+                self.after(0, lambda: self.status_label.configure(text=f"Export failed: {str(e)}"))
+                self.after(0, lambda: messagebox.showerror("Export Error", f"Error during export: {str(e)}"))
+            finally:
+                self.after(0, lambda: self.progress_bar.pack_forget())
+                self.after(0, lambda: self.status_label.configure(text=""))
+        
+        threading.Thread(target=run_export, daemon=True).start()
+
+    def _parse_date(self, date_str):
+        """Parse date string to datetime object"""
+        if not date_str:
+            return datetime.min
+        try:
+            # Try different date formats
+            for fmt in ['%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+            return datetime.min
+        except:
+            return datetime.min
+
+    def _get_contact_country(self, contact):
+        """Get country for a contact (placeholder implementation)"""
+        # This would need to be implemented based on your data structure
+        return contact.get('country', 'Unknown')
+
+    def _create_sales_report(self, ai_data, apollo_data, company_data, hs_data):
+        """Create an enhanced sales report with contact information and company insights"""
+        sales_report = []
+        
+        # Create company lookup
+        company_lookup = {c['company_name'].lower(): c for c in company_data if c.get('company_name')}
+        
+        # Create HS code lookup
+        hs_lookup = {h['hs_code']: h['description'] for h in hs_data if h.get('hs_code')}
+        
+        # Group contacts by company
+        contacts_by_company = defaultdict(list)
+        for contact in apollo_data:
+            company_name = contact.get('company_name', '').lower()
+            if company_name:
+                contacts_by_company[company_name].append(contact)
+        
+        # Create sales report entries
+        for ai_company in ai_data:
+            company_name = ai_company.get('company_name', '')
+            company_name_lower = company_name.lower()
+            
+            # Get company info
+            company_info = company_lookup.get(company_name_lower, {})
+            
+            # Get contacts for this company
+            contacts = contacts_by_company.get(company_name_lower, [])
+            
+            # Get HS code description
+            hs_code = ai_company.get('hs_code', '')
+            hs_description = hs_lookup.get(hs_code, '')
+            
+            # Create sales report entry
+            entry = {
+                'Company Name': company_name,
+                'Company Country': ai_company.get('company_country', ''),
+                'Company Website': ai_company.get('company_website_link', ''),
+                'Company Industry': company_info.get('industry', ''),
+                'Company Size': company_info.get('employee_count', ''),
+                'HS Code': hs_code,
+                'HS Description': hs_description,
+                'Product Keyword': ai_company.get('keyword', ''),
+                'Search Country': ai_company.get('country', ''),
+                'Company Description': ai_company.get('description', ''),
+                'Contact Count': len(contacts),
+                'Primary Contact Name': contacts[0].get('name', '') if contacts else '',
+                'Primary Contact Title': contacts[0].get('title', '') if contacts else '',
+                'Primary Contact Email': contacts[0].get('email', '') if contacts else '',
+                'Primary Contact LinkedIn': contacts[0].get('linkedin', '') if contacts else '',
+                'All Contact Emails': '; '.join([c.get('email', '') for c in contacts if c.get('email')]),
+                'All Contact LinkedIn': '; '.join([c.get('linkedin', '') for c in contacts if c.get('linkedin')]),
+                'Lead Score': self._calculate_lead_score(company_info, contacts, ai_company),
+                'Source': ai_company.get('source', ''),
+                'Created Date': ai_company.get('created_at', '')
+            }
+            sales_report.append(entry)
+        
+        return sales_report
+
+    def _create_market_analysis(self, ai_data, company_data, hs_data):
+        """Create a market analysis report with trends and insights"""
+        market_analysis = []
+        
+        # Analyze market trends
+        hs_code_counts = Counter()
+        country_counts = Counter()
+        keyword_counts = Counter()
+        
+        for company in ai_data:
+            hs_code_counts[company.get('hs_code', '')] += 1
+            country_counts[company.get('company_country', '')] += 1
+            keyword_counts[company.get('keyword', '')] += 1
+        
+        # Create market analysis entries
+        for hs_code, count in hs_code_counts.most_common():
+            hs_description = next((h['description'] for h in hs_data if h.get('hs_code') == hs_code), '')
+            
+            # Get companies for this HS code
+            companies_for_hs = [c for c in ai_data if c.get('hs_code') == hs_code]
+            countries_for_hs = Counter(c.get('company_country', '') for c in companies_for_hs)
+            
+            entry = {
+                'HS Code': hs_code,
+                'HS Description': hs_description,
+                'Total Companies': count,
+                'Top Countries': '; '.join([f"{country} ({count})" for country, count in countries_for_hs.most_common(5)]),
+                'Market Share %': round((count / len(ai_data)) * 100, 2) if ai_data else 0,
+                'Average Company Size': self._calculate_avg_company_size(companies_for_hs, company_data),
+                'Keywords Used': '; '.join(set(c.get('keyword', '') for c in companies_for_hs)),
+                'Market Trend': self._determine_market_trend(companies_for_hs),
+                'Source': 'DeepSeek Analysis'
+            }
+            market_analysis.append(entry)
+        
+        return market_analysis
+
+    def _create_lead_scoring(self, apollo_data, ai_data, company_data):
+        """Create a lead scoring report with prioritization"""
+        lead_scoring = []
+        
+        # Create company lookup
+        company_lookup = {c['company_name'].lower(): c for c in company_data if c.get('company_name')}
+        
+        # Group contacts by company
+        contacts_by_company = defaultdict(list)
+        for contact in apollo_data:
+            company_name = contact.get('company_name', '').lower()
+            if company_name:
+                contacts_by_company[company_name].append(contact)
+        
+        # Score each company
+        for company_name, contacts in contacts_by_company.items():
+            company_info = company_lookup.get(company_name, {})
+            
+            # Find AI data for this company
+            ai_company = next((c for c in ai_data if c.get('company_name', '').lower() == company_name), {})
+            
+            # Calculate lead score
+            lead_score = self._calculate_lead_score(company_info, contacts, ai_company)
+            
+            # Determine priority
+            if lead_score >= 80:
+                priority = "High"
+            elif lead_score >= 60:
+                priority = "Medium"
+            else:
+                priority = "Low"
+            
+            entry = {
+                'Company Name': contacts[0].get('company_name', '') if contacts else company_name,
+                'Lead Score': lead_score,
+                'Priority': priority,
+                'Contact Count': len(contacts),
+                'Has Email': any(c.get('email') for c in contacts),
+                'Has LinkedIn': any(c.get('linkedin') for c in contacts),
+                'Company Size': company_info.get('employee_count', ''),
+                'Company Industry': company_info.get('industry', ''),
+                'Company Country': company_info.get('country', ''),
+                'HS Code Interest': ai_company.get('hs_code', ''),
+                'Product Interest': ai_company.get('keyword', ''),
+                'Primary Contact': contacts[0].get('name', '') if contacts else '',
+                'Primary Contact Title': contacts[0].get('title', '') if contacts else '',
+                'Primary Contact Email': contacts[0].get('email', '') if contacts else '',
+                'All Emails': '; '.join([c.get('email', '') for c in contacts if c.get('email')]),
+                'All LinkedIn': '; '.join([c.get('linkedin', '') for c in contacts if c.get('linkedin')]),
+                'Source': contacts[0].get('source', '') if contacts else '',
+                'Created Date': contacts[0].get('created_at', '') if contacts else ''
+            }
+            lead_scoring.append(entry)
+        
+        # Sort by lead score descending
+        lead_scoring.sort(key=lambda x: x['Lead Score'], reverse=True)
+        return lead_scoring
+
+    def _create_company_intelligence(self, company_data, apollo_data, ai_data):
+        """Create a company intelligence report with comprehensive insights"""
+        company_intelligence = []
+        
+        # Create contact counts
+        contact_counts = Counter()
+        for contact in apollo_data:
+            company_name = contact.get('company_name', '').lower()
+            if company_name:
+                contact_counts[company_name] += 1
+        
+        # Create AI interest counts
+        ai_interest_counts = Counter()
+        for company in ai_data:
+            company_name = company.get('company_name', '').lower()
+            if company_name:
+                ai_interest_counts[company_name] += 1
+        
+        for company in company_data:
+            company_name = company.get('company_name', '')
+            company_name_lower = company_name.lower()
+            
+            # Get contact count
+            contact_count = contact_counts.get(company_name_lower, 0)
+            
+            # Get AI interest count
+            ai_interest_count = ai_interest_counts.get(company_name_lower, 0)
+            
+            # Get contacts for this company
+            contacts = [c for c in apollo_data if c.get('company_name', '').lower() == company_name_lower]
+            
+            # Get AI interests for this company
+            ai_interests = [c for c in ai_data if c.get('company_name', '').lower() == company_name_lower]
+            
+            entry = {
+                'Company Name': company_name,
+                'Company Country': company.get('country', ''),
+                'Company Industry': company.get('industry', ''),
+                'Company Size': company.get('employee_count', ''),
+                'Company Domain': company.get('domain', ''),
+                'Contact Count': contact_count,
+                'AI Interest Count': ai_interest_count,
+                'Total Engagement Score': contact_count + ai_interest_count,
+                'Has Verified Contacts': contact_count > 0,
+                'Has AI Interest': ai_interest_count > 0,
+                'Contact Emails': '; '.join(set(c.get('email', '') for c in contacts if c.get('email'))),
+                'Contact LinkedIn': '; '.join(set(c.get('linkedin', '') for c in contacts if c.get('linkedin'))),
+                'Interested HS Codes': '; '.join(set(c.get('hs_code', '') for c in ai_interests if c.get('hs_code'))),
+                'Interested Keywords': '; '.join(set(c.get('keyword', '') for c in ai_interests if c.get('keyword'))),
+                'Company Intelligence Score': self._calculate_company_intelligence_score(company, contacts, ai_interests),
+                'Source': company.get('source', ''),
+                'Created Date': company.get('created_at', '')
+            }
+            company_intelligence.append(entry)
+        
+        # Sort by intelligence score descending
+        company_intelligence.sort(key=lambda x: x['Company Intelligence Score'], reverse=True)
+        return company_intelligence
+
+    def _calculate_lead_score(self, company_info, contacts, ai_company):
+        """Calculate a lead score based on various factors"""
+        score = 0
+        
+        # Company size factor (0-20 points)
+        employee_count = company_info.get('employee_count', 0)
+        if employee_count:
+            if employee_count > 1000:
+                score += 20
+            elif employee_count > 500:
+                score += 15
+            elif employee_count > 100:
+                score += 10
+            elif employee_count > 50:
+                score += 5
+        
+        # Contact quality factor (0-30 points)
+        if contacts:
+            score += min(len(contacts) * 5, 15)  # Up to 15 points for contact count
+            if any(c.get('email') for c in contacts):
+                score += 10  # 10 points for having email
+            if any(c.get('linkedin') for c in contacts):
+                score += 5   # 5 points for having LinkedIn
+        
+        # AI interest factor (0-30 points)
+        if ai_company:
+            score += 20  # Base points for AI interest
+            if ai_company.get('company_website_link'):
+                score += 5   # 5 points for having website
+            if ai_company.get('description'):
+                score += 5   # 5 points for having description
+        
+        # Industry factor (0-20 points)
+        industry = company_info.get('industry', '').lower()
+        if any(keyword in industry for keyword in ['medical', 'healthcare', 'hospital', 'clinic', 'pharmaceutical']):
+            score += 20
+        elif any(keyword in industry for keyword in ['manufacturing', 'industrial', 'construction', 'automotive']):
+            score += 15
+        elif any(keyword in industry for keyword in ['retail', 'wholesale', 'distribution', 'logistics']):
+            score += 10
+        
+        return min(score, 100)  # Cap at 100
+
+    def _calculate_avg_company_size(self, companies, company_data):
+        """Calculate average company size for a group of companies"""
+        company_lookup = {c['company_name'].lower(): c for c in company_data if c.get('company_name')}
+        
+        sizes = []
+        for company in companies:
+            company_name = company.get('company_name', '').lower()
+            company_info = company_lookup.get(company_name, {})
+            employee_count = company_info.get('employee_count', 0)
+            if employee_count:
+                sizes.append(employee_count)
+        
+        if sizes:
+            return sum(sizes) // len(sizes)
+        return 0
+
+    def _determine_market_trend(self, companies):
+        """Determine market trend based on company data"""
+        if not companies:
+            return "No Data"
+        
+        # Simple trend determination based on company count
+        if len(companies) > 10:
+            return "High Growth"
+        elif len(companies) > 5:
+            return "Growing"
+        elif len(companies) > 2:
+            return "Stable"
+        else:
+            return "Emerging"
+
+    def _calculate_company_intelligence_score(self, company, contacts, ai_interests):
+        """Calculate company intelligence score"""
+        score = 0
+        
+        # Base company info (0-20 points)
+        if company.get('industry'):
+            score += 10
+        if company.get('employee_count'):
+            score += 10
+        
+        # Contact quality (0-30 points)
+        if contacts:
+            score += min(len(contacts) * 3, 15)
+            if any(c.get('email') for c in contacts):
+                score += 10
+            if any(c.get('linkedin') for c in contacts):
+                score += 5
+        
+        # AI interest (0-30 points)
+        if ai_interests:
+            score += min(len(ai_interests) * 5, 20)
+            if any(c.get('company_website_link') for c in ai_interests):
+                score += 5
+            if any(c.get('description') for c in ai_interests):
+                score += 5
+        
+        # Engagement factor (0-20 points)
+        total_engagement = len(contacts) + len(ai_interests)
+        if total_engagement > 5:
+            score += 20
+        elif total_engagement > 3:
+            score += 15
+        elif total_engagement > 1:
+            score += 10
+        
+        return min(score, 100)
+
+    def _export_to_csv(self, file_path, all_data, include_headers):
+        """Export data to CSV format"""
+        import csv
+        
+        with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            for sheet_name, data in all_data.items():
+                if not data:
+                    continue
+                
+                # Write sheet name as section header
+                writer.writerow([f"=== {sheet_name} ==="])
+                
+                if include_headers and data:
+                    # Write headers
+                    headers = list(data[0].keys())
+                    writer.writerow(headers)
+                
+                # Write data
+                for row in data:
+                    writer.writerow([row.get(header, '') for header in headers])
+                
+                # Add spacing between sections
+                writer.writerow([])
+                writer.writerow([])
+
+    def _export_to_excel(self, file_path, all_data, include_headers):
+        """Export data to Excel format"""
+        try:
+            import pandas as pd
+            from openpyxl import Workbook
+            from openpyxl.utils.dataframe import dataframe_to_rows
+            
+            # Create Excel workbook
+            wb = Workbook()
+            
+            # Remove default sheet if it exists
+            if wb.active is not None:
+                wb.remove(wb.active)
+            
+            for sheet_name, data in all_data.items():
+                if not data:
+                    continue
+                
+                # Create DataFrame
+                df = pd.DataFrame(data)
+                
+                # Create worksheet
+                ws = wb.create_sheet(title=sheet_name[:31])  # Excel sheet names limited to 31 chars
+                
+                # Write headers
+                if include_headers:
+                    for col, header in enumerate(df.columns, 1):
+                        ws.cell(row=1, column=col, value=header)
+                
+                # Write data
+                for row_idx, row in enumerate(dataframe_to_rows(df, index=False, header=False), 2 if include_headers else 1):
+                    for col_idx, value in enumerate(row, 1):
+                        ws.cell(row=row_idx, column=col_idx, value=value)
+            
+            # Save workbook
+            wb.save(file_path)
+            
+        except ImportError:
+            # Fallback to CSV if pandas/openpyxl not available
+            messagebox.showwarning("Excel Export", "Pandas/OpenPyXL not available. Falling back to CSV format.")
+            self._export_to_csv(file_path, all_data, include_headers)
 
 class HSCodePage(ctk.CTkFrame):
     def __init__(self, master):
@@ -675,7 +1806,7 @@ class HSCodePage(ctk.CTkFrame):
         self.table.column("hs_code", width=120, anchor="center")
         self.table.column("desc", width=400, anchor="w")
         self.table.pack(fill="both", expand=True, padx=8, pady=8)
-        self.populate_table()
+        self._add_table_sorting()
 
         # Action buttons below table
         action_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
@@ -689,33 +1820,35 @@ class HSCodePage(ctk.CTkFrame):
         def load_table_data():
             country = self.country_var.get()
             query = self.search_var.get().strip().lower()
-            
             if country == "All":
                 data = GUI_db.get_all_hs_codes()
             else:
                 data = GUI_db.get_hs_codes_by_country(country)
-            
             # Filter data
             filtered_data = []
             for entry in data:
                 if query and query not in entry['hs_code'].lower() and query not in entry['description'].lower():
                     continue
                 filtered_data.append(entry)
-            
+            # Sort by country and hs_code ascending
+            filtered_data = sorted(filtered_data, key=lambda x: (x.get('country', ''), x.get('hs_code', '')))
             return filtered_data
-        
         def on_data_loaded(data):
-            # Schedule UI update on main thread
             self.after(0, lambda: self._update_table_ui(data))
-        
         def on_error(error):
             print(f"Error loading table data: {error}")
-            # Schedule UI update on main thread
             self.after(0, lambda: self._clear_table_ui())
-        
-        # Run in background
         run_in_background(load_table_data, on_data_loaded, on_error)
-    
+
+    def _add_table_sorting(self):
+        for col in self.table['columns']:
+            self.table.heading(col, command=lambda c=col: self._sort_by_column(c, False))
+    def _sort_by_column(self, col, descending):
+        data = [(self.table.set(child, col), child) for child in self.table.get_children('')]
+        data.sort(reverse=descending)
+        for index, (val, child) in enumerate(data):
+            self.table.move(child, '', index)
+        self.table.heading(col, command=lambda: self._sort_by_column(col, not descending))
     def _update_table_ui(self, data):
         """Update table on main thread"""
         # Clear existing rows
@@ -1086,41 +2219,49 @@ class ApolloPage(ctk.CTkFrame):
         
         ctk.CTkLabel(search_content, text="Search Parameters", font=("Poppins", 18, "bold"), text_color="#0078D4").pack(anchor="w", pady=(0, 12))
         
-        # Parameters row
+        # Parameters row (now as a grid for better layout)
         param_frame = ctk.CTkFrame(search_content, fg_color="transparent")
         param_frame.pack(fill="x", pady=8)
-        
-        # Country selection
-        ctk.CTkLabel(param_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left")
+        param_frame.grid_columnconfigure(0, weight=1)
+        param_frame.grid_columnconfigure(1, weight=1)
+
+        # Country selection (row 0)
+        ctk.CTkLabel(param_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").grid(row=0, column=0, sticky="w")
         self.country_var = tk.StringVar(value="Select Country")
         country_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
-        country_frame.pack(side="left", padx=(8, 24))
-        
-        # Country display (read-only)
+        country_frame.grid(row=0, column=1, sticky="ew", padx=(8, 24))
         self.country_display = ctk.CTkEntry(country_frame, textvariable=self.country_var, state="readonly", width=200, font=("Poppins", 15))
         self.country_display.pack(side="left")
-        
-        # Select country button
         select_country_btn = ctk.CTkButton(country_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
         select_country_btn.pack(side="left", padx=(8, 0))
-        
-        # Company selection
-        ctk.CTkLabel(param_frame, text="Company:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left")
+
+        # Company selection (row 1)
+        ctk.CTkLabel(param_frame, text="Company:", font=("Poppins", 15), text_color="#6B7C93").grid(row=1, column=0, sticky="w", pady=(8,0))
         self.company_var = tk.StringVar(value="Type or select a company...")
         company_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
-        company_frame.pack(side="left", padx=(8, 24))
-        
-        # Company display (read-only)
+        company_frame.grid(row=1, column=1, sticky="ew", padx=(8, 24), pady=(8,0))
         self.company_display = ctk.CTkEntry(company_frame, textvariable=self.company_var, state="readonly", width=280, font=("Poppins", 15))
         self.company_display.pack(side="left")
-        
-        # Select company button
-        select_btn = ctk.CTkButton(company_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_company_selector)
-        select_btn.pack(side="left", padx=(8, 0))
-        
-        # Search button
+        self.select_btn = ctk.CTkButton(company_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_company_selector)
+        self.select_btn.pack(side="left", padx=(8, 0))
+        # Initially disable company entry and button
+        self.company_display.configure(state="disabled")
+        self.select_btn.configure(state="disabled")
+
+        # Update enable/disable state when country changes
+        def on_country_change(*args):
+            country = self.country_var.get()
+            if country and country != "Select Country":
+                self.company_display.configure(state="readonly")
+                self.select_btn.configure(state="normal")
+            else:
+                self.company_display.configure(state="disabled")
+                self.select_btn.configure(state="disabled")
+        self.country_var.trace_add('write', on_country_change)
+
+        # Search button (row 2)
         self.search_btn = ctk.CTkButton(param_frame, text="Search Decision Makers", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8, command=self.do_search)
-        self.search_btn.pack(side="right")
+        self.search_btn.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12,0))
         
         # Results Card
         results_card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
@@ -1501,15 +2642,6 @@ class ApolloSearchDialog(ctk.CTkToplevel):
             'Brunei', 'Timor-Leste', 'Maldives', 'Bhutan'
         ]
 
-    def open_country_selector(self):
-        """Open a searchable country selection dialog"""
-        country_list = ["Select Country"] + self._get_all_countries()
-        dialog = CountrySelectorDialog(self, country_list)
-        self.wait_window(dialog)  # Wait for dialog to close
-        selected_country = dialog.get_selected()
-        if selected_country and selected_country != "Select Country":
-            self.country_var.set(selected_country)
-
     def start_search(self):
         """Start the Apollo company search"""
         country = self.country_var.get().strip()
@@ -1601,8 +2733,14 @@ class ApolloSearchDialog(ctk.CTkToplevel):
                     messagebox.showinfo("Search Complete", f"Found and saved {total_saved} new companies to the database.")
                     
                     # Refresh the parent Apollo page after successful search
-                    if hasattr(self.master, 'refresh_apollo_data'):
-                        self.master.refresh_apollo_data()
+                    try:
+                        parent = self.master
+                        while parent and not hasattr(parent, 'refresh_apollo_data'):
+                            parent = parent.master
+                        if parent and hasattr(parent, 'refresh_apollo_data'):
+                            parent.refresh_apollo_data()
+                    except Exception:
+                        pass  # Ignore if refresh fails
                     
                     self.destroy()
                 
@@ -1622,46 +2760,47 @@ class CountrySelectorDialog(ctk.CTkToplevel):
     def __init__(self, parent, country_list):
         super().__init__(parent)
         self.title("Select Country")
-        self.geometry("500x400")
+        self.geometry("500x600")  # Increased height
         self.grab_set()
-        
         self.country_list = country_list
         self.selected_country = None
-        
+        self.current_page = 0
+        self.items_per_page = 100
         ctk.CTkLabel(self, text="Select a country:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
-        
-        # Search frame
         search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         search_frame.pack(fill="x", padx=24, pady=(0, 12))
-        
         self.search_var = tk.StringVar()
         self.search_var.trace("w", self.on_search)
         search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search countries...", font=("Poppins", 14))
         search_entry.pack(fill="x", padx=16, pady=16)
-        
-        # Scrollable frame for countries
         self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
         self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
-        
-        # Country buttons (will be populated)
         self.country_buttons = []
-        self.populate_countries(self.country_list)
-        
-        # Buttons
+        self.filtered_countries = self.country_list[:]
+        # Pagination controls (must be created before populate_countries)
+        self.pagination_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        self.pagination_frame.pack(fill="x", padx=24, pady=(0, 0))
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", command=self.prev_page, width=80)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", command=self.next_page, width=80)
+        self.page_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.prev_btn.pack(side="left")
+        self.page_label.pack(side="left", padx=8)
+        self.next_btn.pack(side="left")
         button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         button_frame.pack(fill="x", padx=24, pady=(0, 24))
-        
         ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+        # Now safe to call populate_countries
+        self.populate_countries()
+        self.update_pagination_controls()
 
-    def populate_countries(self, countries):
-        """Populate the scrollable frame with country buttons"""
-        # Clear existing buttons
+    def populate_countries(self):
         for btn in self.country_buttons:
             btn.destroy()
         self.country_buttons.clear()
-        
-        # Add country buttons
-        for country in countries:
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        shown_countries = self.filtered_countries[start:end]
+        for country in shown_countries:
             if country != "Select Country":
                 from utils.display import truncate_company_name
                 truncated_country = truncate_company_name(country, max_length=35)
@@ -1677,74 +2816,82 @@ class CountrySelectorDialog(ctk.CTkToplevel):
                 )
                 btn.pack(fill="x", padx=8, pady=2)
                 self.country_buttons.append(btn)
+        self.update_pagination_controls()
+
+    def update_pagination_controls(self):
+        total_pages = max(1, (len(self.filtered_countries) - 1) // self.items_per_page + 1)
+        self.page_label.configure(text=f"Page {self.current_page + 1} of {total_pages}")
+        self.prev_btn.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_btn.configure(state="normal" if (self.current_page + 1) * self.items_per_page < len(self.filtered_countries) else "disabled")
+
+    def next_page(self):
+        if (self.current_page + 1) * self.items_per_page < len(self.filtered_countries):
+            self.current_page += 1
+            self.populate_countries()
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.populate_countries()
 
     def on_search(self, *args):
-        """Filter countries based on search term"""
         search_term = self.search_var.get().lower()
-        filtered_countries = []
-        
-        for country in self.country_list:
-            if search_term in country.lower():
-                filtered_countries.append(country)
-        
-        self.populate_countries(filtered_countries)
+        self.filtered_countries = [country for country in self.country_list if search_term in country.lower()]
+        self.current_page = 0
+        self.populate_countries()
 
     def select_country(self, country):
-        """Select a country and close dialog"""
         self.selected_country = country
         self.destroy()
 
     def get_selected(self):
-        """Return the selected country"""
         return self.selected_country
-
 
 class CompanySelectorDialog(ctk.CTkToplevel):
     def __init__(self, parent, company_list):
         super().__init__(parent)
         self.title("Select Company")
-        self.geometry("500x400")
+        self.geometry("500x600")  # Increased height
         self.grab_set()
-        
         self.company_list = company_list
         self.selected_company = None
-        
+        self.current_page = 0
+        self.items_per_page = 100
         ctk.CTkLabel(self, text="Select a company:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
-        
-        # Search frame
         search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         search_frame.pack(fill="x", padx=24, pady=(0, 12))
-        
         self.search_var = tk.StringVar()
         self.search_var.trace("w", self.on_search)
         search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search companies...", font=("Poppins", 14))
         search_entry.pack(fill="x", padx=16, pady=16)
-        
-        # Scrollable frame for companies
         self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
         self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
-        
-        # Company buttons (will be populated)
         self.company_buttons = []
-        self.populate_companies(self.company_list)
-        
-        # Buttons
+        self.filtered_companies = self.company_list[:]
+        # Pagination controls (must be created before populate_companies)
+        self.pagination_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        self.pagination_frame.pack(fill="x", padx=24, pady=(0, 0))
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", command=self.prev_page, width=80)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", command=self.next_page, width=80)
+        self.page_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.prev_btn.pack(side="left")
+        self.page_label.pack(side="left", padx=8)
+        self.next_btn.pack(side="left")
         button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         button_frame.pack(fill="x", padx=24, pady=(0, 24))
-        
         ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+        # Now safe to call populate_companies
+        self.populate_companies()
+        self.update_pagination_controls()
 
-    def populate_companies(self, companies):
-        """Populate the scrollable frame with company buttons"""
-        # Clear existing buttons
+    def populate_companies(self):
         for btn in self.company_buttons:
             btn.destroy()
         self.company_buttons.clear()
-        
-
-        
-        # Add company buttons
-        for company in companies:
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        shown_companies = self.filtered_companies[start:end]
+        for company in shown_companies:
             if company != "Type or select a company...":
                 from utils.display import truncate_company_name
                 truncated_company = truncate_company_name(company, max_length=35)
@@ -1760,108 +2907,39 @@ class CompanySelectorDialog(ctk.CTkToplevel):
                 )
                 btn.pack(fill="x", padx=8, pady=2)
                 self.company_buttons.append(btn)
-        
+        self.update_pagination_controls()
 
+    def update_pagination_controls(self):
+        total_pages = max(1, (len(self.filtered_companies) - 1) // self.items_per_page + 1)
+        self.page_label.configure(text=f"Page {self.current_page + 1} of {total_pages}")
+        self.prev_btn.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_btn.configure(state="normal" if (self.current_page + 1) * self.items_per_page < len(self.filtered_companies) else "disabled")
+
+    def next_page(self):
+        if (self.current_page + 1) * self.items_per_page < len(self.filtered_companies):
+            self.current_page += 1
+            self.populate_companies()
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.populate_companies()
 
     def on_search(self, *args):
-        """Filter companies based on search term"""
         search_term = self.search_var.get().lower()
-        filtered_companies = []
-        
-        for company in self.company_list:
-            if search_term in company.lower():
-                filtered_companies.append(company)
-        
-        self.populate_companies(filtered_companies)
+        self.filtered_companies = [company for company in self.company_list if search_term in company.lower()]
+        self.current_page = 0
+        self.populate_companies()
 
     def select_company(self, company):
-        """Select a company and close dialog"""
-        
         self.selected_company = company
         self.destroy()
 
     def get_selected(self):
-        """Return the selected company"""
         return self.selected_company
 
 
-class CountrySelectorDialog(ctk.CTkToplevel):
-    def __init__(self, parent, country_list):
-        super().__init__(parent)
-        self.title("Select Country")
-        self.geometry("500x400")
-        self.grab_set()
-        
-        self.country_list = country_list
-        self.selected_country = None
-        
-        ctk.CTkLabel(self, text="Select a country:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
-        
-        # Search frame
-        search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
-        search_frame.pack(fill="x", padx=24, pady=(0, 12))
-        
-        self.search_var = tk.StringVar()
-        self.search_var.trace("w", self.on_search)
-        search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search countries...", font=("Poppins", 14))
-        search_entry.pack(fill="x", padx=16, pady=16)
-        
-        # Scrollable frame for countries
-        self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
-        self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
-        
-        # Country buttons (will be populated)
-        self.country_buttons = []
-        self.populate_countries(self.country_list)
-        
-        # Buttons
-        button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
-        button_frame.pack(fill="x", padx=24, pady=(0, 24))
-        
-        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
 
-    def populate_countries(self, countries):
-        """Populate the scrollable frame with country buttons"""
-        # Clear existing buttons
-        for btn in self.country_buttons:
-            btn.destroy()
-        self.country_buttons.clear()
-        
-        # Add country buttons
-        for country in countries:
-            if country != "Select Country":
-                btn = ctk.CTkButton(
-                    self.scroll_frame,
-                    text=country, 
-                    fg_color="#FFFFFF", 
-                    hover_color="#EAF3FF",
-                    text_color="#2E3A59", 
-                    font=("Poppins", 13),
-                    anchor="w",
-                    command=lambda c=country: self.select_country(c)
-                )
-                btn.pack(fill="x", padx=8, pady=2)
-                self.country_buttons.append(btn)
-
-    def on_search(self, *args):
-        """Filter countries based on search term"""
-        search_term = self.search_var.get().lower()
-        filtered_countries = []
-        
-        for country in self.country_list:
-            if search_term in country.lower():
-                filtered_countries.append(country)
-        
-        self.populate_countries(filtered_countries)
-
-    def select_country(self, country):
-        """Select a country and close dialog"""
-        self.selected_country = country
-        self.destroy()
-
-    def get_selected(self):
-        """Return the selected country"""
-        return self.selected_country
 
 
 class HSCodeSelectorDialog(ctk.CTkToplevel):
@@ -2034,15 +3112,12 @@ class MainApp(ctk.CTk):
         # Launch in fullscreen more reliably
         self.after(10, self.maximize_window)
         self.configure(bg="#F5F7FA")
-        
         # Sidebar with increased width for longer names
         self.sidebar = ctk.CTkFrame(self, fg_color="#F5F7FA", width=280, corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
-        
         # Branding/logo placeholder
         ctk.CTkLabel(self.sidebar, text="LOGO", font=("Poppins", 22, "bold"), text_color="#0078D4").pack(pady=(32, 24))
-        
         # Nav buttons
         self.nav_btns = []
         for i, label in enumerate(NAV_LABELS):
@@ -2060,19 +3135,18 @@ class MainApp(ctk.CTk):
             )
             btn.pack(fill="x", padx=16, pady=2)
             self.nav_btns.append(btn)
-        
         # Main content area
         self.content_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         self.content_frame.pack(side="left", fill="both", expand=True)
-        
         self.pages = [
             DashboardContent(self.content_frame),
             BuyerSearchPage(self.content_frame),
+            DeepSeekBuyerResultsPage(self.content_frame),
             ApolloPage(self.content_frame),
-            WorkInProgress(self.content_frame, "Buyer List"),
+            ApolloBuyerListPage(self.content_frame),
             HSCodePage(self.content_frame),
-            WorkInProgress(self.content_frame, "Export"),
-            WorkInProgress(self.content_frame, "Settings"),
+            ExportPage(self.content_frame),
+            ctk.CTkFrame(self.content_frame, fg_color="#F5F7FA"),  # Placeholder for Settings
         ]
         for page in self.pages:
             page.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -2102,6 +3176,268 @@ class MainApp(ctk.CTk):
         """Handle app shutdown"""
         task_manager.shutdown()
         self.quit()
+
+class ApolloBuyerListPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color="#F5F7FA")
+        self.selected_company = None
+        self.current_page = 0
+        self.items_per_page = 50
+        self._build_ui()
+        self.populate_table()
+
+    def _build_ui(self):
+        # Title
+        title_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        title_frame.pack(fill="x", pady=(24, 16), padx=32)
+        ctk.CTkLabel(title_frame, text="Buyer List (Apollo)", font=("Poppins", 24, "bold"), text_color="#2E3A59").pack(side="left")
+        # Search/filter row
+        filter_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        filter_frame.pack(fill="x", pady=(18, 0), padx=32)
+        ctk.CTkLabel(filter_frame, text="Search:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(0, 8))
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search_change)
+        search_entry = ctk.CTkEntry(filter_frame, textvariable=self.search_var, placeholder_text="Search name, company, email...", width=300, font=("Poppins", 15))
+        search_entry.pack(side="left", padx=(0, 12))
+        # Company filter
+        ctk.CTkLabel(filter_frame, text="Company:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(16, 8))
+        self.company_filter_var = tk.StringVar(value="All")
+        company_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        company_frame.pack(side="left", padx=(0, 12))
+        self.company_display = ctk.CTkEntry(company_frame, textvariable=self.company_filter_var, state="readonly", width=180, font=("Poppins", 15))
+        self.company_display.pack(side="left")
+        select_company_btn = ctk.CTkButton(company_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_company_selector)
+        select_company_btn.pack(side="left", padx=(8, 0))
+        refresh_btn = ctk.CTkButton(filter_frame, text="Refresh", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=100, command=self.populate_table)
+        refresh_btn.pack(side="left", padx=(0, 8))
+        clear_all_btn = ctk.CTkButton(filter_frame, text="Clear All", fg_color="#B0BEC5", hover_color="#90A4AE", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=120, command=self.clear_all_filters)
+        clear_all_btn.pack(side="left")
+        # Table frame
+        table_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
+        table_frame.pack(fill="both", expand=True, padx=32, pady=(18, 0))
+        style = ttk.Style()
+        style.configure("ApolloBuyer.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
+        style.configure("ApolloBuyer.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#0078D4")
+        style.map("ApolloBuyer.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
+        self.table = ttk.Treeview(table_frame, columns=("id", "name", "title", "email", "linkedin", "company_name", "source", "created_at"), show="headings", style="ApolloBuyer.Treeview")
+        self.table.heading("id", text="ID")
+        self.table.heading("name", text="Name")
+        self.table.heading("title", text="Title")
+        self.table.heading("email", text="Email")
+        self.table.heading("linkedin", text="LinkedIn")
+        self.table.heading("company_name", text="Company Name")
+        self.table.heading("source", text="Source")
+        self.table.heading("created_at", text="Created At")
+        self.table.column("id", width=60, anchor="center")
+        self.table.column("name", width=150, anchor="w")
+        self.table.column("title", width=200, anchor="w")
+        self.table.column("email", width=200, anchor="w")
+        self.table.column("linkedin", width=150, anchor="w")
+        self.table.column("company_name", width=200, anchor="w")
+        self.table.column("source", width=100, anchor="center")
+        self.table.column("created_at", width=140, anchor="center")
+        self.table.pack(fill="both", expand=True, padx=8, pady=8)
+        # Pagination controls
+        self.pagination_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        self.pagination_frame.pack(fill="x", padx=32, pady=(0, 8))
+        self.prev_btn = ctk.CTkButton(self.pagination_frame, text="Previous", command=self.prev_page, width=80)
+        self.next_btn = ctk.CTkButton(self.pagination_frame, text="Next", command=self.next_page, width=80)
+        self.page_label = ctk.CTkLabel(self.pagination_frame, text="")
+        self.prev_btn.pack(side="left")
+        self.page_label.pack(side="left", padx=8)
+        self.next_btn.pack(side="left")
+        # Action buttons below table
+        action_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        action_frame.pack(fill="x", padx=32, pady=(8, 24))
+        export_btn = ctk.CTkButton(action_frame, text="Export Results", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8, width=150, command=self.export_results)
+        export_btn.pack(side="right", padx=(0, 12))
+        edit_btn = ctk.CTkButton(action_frame, text="Edit Selected", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=140, command=self.edit_selected)
+        edit_btn.pack(side="right", padx=(0, 12))
+        delete_btn = ctk.CTkButton(action_frame, text="Delete Selected", fg_color="#F44336", hover_color="#D32F2F", text_color="#FFFFFF", font=("Poppins", 15), corner_radius=8, width=140, command=self.delete_selected)
+        delete_btn.pack(side="right", padx=(0, 12))
+
+    def open_company_selector(self):
+        import GUI_db
+        companies = sorted(set(c['company_name'] for c in GUI_db.get_all_contacts() if c.get('company_name')))
+        dialog = CompanySelectorDialog(self, companies)
+        self.wait_window(dialog)
+        selected_company = dialog.get_selected()
+        if selected_company:
+            self.company_filter_var.set(selected_company)
+            self.current_page = 0
+            self.populate_table()
+
+    def clear_all_filters(self):
+        """Clear both search term and company filter"""
+        self.search_var.set("")
+        self.company_filter_var.set("All")
+        self.current_page = 0
+        self.populate_table()
+
+    def populate_table(self):
+        """Populate the table with Apollo contacts, filtered and paginated"""
+        import GUI_db
+        search_term = self.search_var.get().strip().lower()
+        company_filter = self.company_filter_var.get()
+        results = GUI_db.get_all_contacts()
+        # Filter by company
+        if company_filter and company_filter != "All":
+            results = [c for c in results if c.get('company_name', '') == company_filter]
+        # Filter by search
+        if search_term:
+            filtered = []
+            for entry in results:
+                if (search_term in str(entry.get('name', '')).lower() or
+                    search_term in str(entry.get('company_name', '')).lower() or
+                    search_term in str(entry.get('email', '')).lower()):
+                    filtered.append(entry)
+            results = filtered
+        # Sort by id ascending
+        results = sorted(results, key=lambda x: x.get('id', 0))
+        # Pagination
+        total_pages = max(1, (len(results) - 1) // self.items_per_page + 1)
+        start = self.current_page * self.items_per_page
+        end = start + self.items_per_page
+        page_results = results[start:end]
+        for row in self.table.get_children():
+            self.table.delete(row)
+        for entry in page_results:
+            self.table.insert("", "end", iid=entry['id'], values=(
+                entry.get('id', ''),
+                entry.get('name', ''),
+                entry.get('title', ''),
+                entry.get('email', ''),
+                entry.get('linkedin', ''),
+                entry.get('company_name', ''),
+                entry.get('source', ''),
+                entry.get('created_at', '')
+            ))
+        self.page_label.configure(text=f"Page {self.current_page + 1} of {total_pages}")
+        self.prev_btn.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_btn.configure(state="normal" if (self.current_page + 1) * self.items_per_page < len(results) else "disabled")
+
+    def next_page(self):
+        self.current_page += 1
+        self.populate_table()
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.populate_table()
+
+    def on_search_change(self, *args):
+        self.current_page = 0
+        self.populate_table()
+
+    def clear_search(self):
+        self.search_var.set("")
+        self.current_page = 0
+        self.populate_table()
+
+    def edit_selected(self):
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showwarning("Edit Contact", "Please select a row to edit.")
+            return
+        contact_id = int(selected[0])
+        import GUI_db
+        record = next((c for c in GUI_db.get_all_contacts() if c['id'] == contact_id), None)
+        if not record:
+            messagebox.showerror("Not Found", "Selected contact not found.")
+            return
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Edit Contact")
+        dialog.geometry("600x600")
+        dialog.grab_set()
+        dialog.transient(self.winfo_toplevel())
+        ctk.CTkLabel(dialog, text="Edit Contact", font=("Poppins", 20, "bold"), text_color="#2E3A59").pack(pady=(24, 16))
+        form_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
+        form_frame.pack(fill="both", expand=True, padx=24, pady=(0, 16))
+        # Name
+        ctk.CTkLabel(form_frame, text="Name:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(16, 4))
+        name_var = tk.StringVar(value=record.get('name', ''))
+        name_entry = ctk.CTkEntry(form_frame, textvariable=name_var, font=("Poppins", 14))
+        name_entry.pack(fill="x", padx=16, pady=(0, 12))
+        # Title
+        ctk.CTkLabel(form_frame, text="Title:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        title_var = tk.StringVar(value=record.get('title', ''))
+        title_entry = ctk.CTkEntry(form_frame, textvariable=title_var, font=("Poppins", 14))
+        title_entry.pack(fill="x", padx=16, pady=(0, 12))
+        # Email
+        ctk.CTkLabel(form_frame, text="Email:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        email_var = tk.StringVar(value=record.get('email', ''))
+        email_entry = ctk.CTkEntry(form_frame, textvariable=email_var, font=("Poppins", 14))
+        email_entry.pack(fill="x", padx=16, pady=(0, 12))
+        # LinkedIn
+        ctk.CTkLabel(form_frame, text="LinkedIn:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        linkedin_var = tk.StringVar(value=record.get('linkedin', ''))
+        linkedin_entry = ctk.CTkEntry(form_frame, textvariable=linkedin_var, font=("Poppins", 14))
+        linkedin_entry.pack(fill="x", padx=16, pady=(0, 12))
+        # Company Name
+        ctk.CTkLabel(form_frame, text="Company Name:", font=("Poppins", 15)).pack(anchor="w", padx=16, pady=(0, 4))
+        company_name_var = tk.StringVar(value=record.get('company_name', ''))
+        company_name_entry = ctk.CTkEntry(form_frame, textvariable=company_name_var, font=("Poppins", 14))
+        company_name_entry.pack(fill="x", padx=16, pady=(0, 12))
+        # Buttons
+        button_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        def on_save():
+            updated_fields = {
+                'name': name_var.get().strip(),
+                'title': title_var.get().strip(),
+                'email': email_var.get().strip(),
+                'linkedin': linkedin_var.get().strip(),
+                'company_name': company_name_var.get().strip(),
+            }
+            if not updated_fields['name'] or not updated_fields['company_name']:
+                messagebox.showwarning("Missing Data", "Please fill in Name and Company Name.")
+                return
+            if GUI_db.update_contact(contact_id, updated_fields):
+                dialog.destroy()
+                self.populate_table()
+                messagebox.showinfo("Success", "Contact updated successfully.")
+            else:
+                messagebox.showerror("Error", "Failed to update contact.")
+        ctk.CTkButton(button_frame, text="Save", fg_color="#0078D4", text_color="#FFFFFF", font=("Poppins", 15, "bold"), command=on_save).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 15), command=dialog.destroy).pack(side="right")
+
+    def delete_selected(self):
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showwarning("Delete Contact", "Please select a row to delete.")
+            return
+        contact_id = int(selected[0])
+        if messagebox.askyesno("Delete Contact", "Are you sure you want to delete this contact?"):
+            if GUI_db.delete_contact(contact_id):
+                self.populate_table()
+                messagebox.showinfo("Success", "Contact deleted successfully.")
+            else:
+                messagebox.showerror("Error", "Failed to delete contact.")
+
+    def export_results(self):
+        import csv
+        from tkinter import filedialog
+        results = []
+        for item in self.table.get_children():
+            values = self.table.item(item)['values']
+            results.append(values)
+        if not results:
+            messagebox.showwarning("No Data", "No results to export.")
+            return
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Buyer List (Apollo)",
+            initialfile="apollo_buyer_list.csv"
+        )
+        if filename:
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                headers = ["ID", "Name", "Title", "Email", "LinkedIn", "Company Name", "Source", "Created At"]
+                writer.writerow(headers)
+                for row in results:
+                    writer.writerow(row)
+            messagebox.showinfo("Export Complete", f"Results exported to {filename}")
 
 if __name__ == "__main__":
     app = MainApp()
