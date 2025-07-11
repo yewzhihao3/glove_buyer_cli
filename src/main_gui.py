@@ -974,7 +974,7 @@ class DeepSeekSelectionDialog(ctk.CTkToplevel):
     def __init__(self, parent, parsed_codes, country):
         super().__init__(parent)
         self.title("Save DeepSeek HS Codes")
-        self.geometry("650x00")  # Increased height
+        self.geometry("650x600")  # Fixed height
         self.grab_set()
         
         self.parsed_codes = parsed_codes
@@ -1559,7 +1559,7 @@ class ApolloSearchDialog(ctk.CTkToplevel):
                         ],
                         "q_organization_keyword_tags": [
                             "latex gloves", "nitrile gloves", "medical gloves",
-                            "surgical gloves", "exam gloves", "biohazard protection"
+                             "exam gloves", "biohazard protection", "disposable gloves"
                         ]
                     }
                     
