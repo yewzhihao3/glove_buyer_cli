@@ -5,15 +5,112 @@ import GUI_db
 import deepseek_agent
 import threading
 import csv
+import os
 from tkinter import filedialog
+import db  # Add this import at the top if not present
+from concurrent.futures import ThreadPoolExecutor
+import queue
+import time
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
+# Global background task manager
+class BackgroundTaskManager:
+    def __init__(self):
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        self.task_queue = queue.Queue()
+        self.running = True
+        
+        # Start background worker thread
+        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
+    
+    def _worker(self):
+        """Background worker that processes tasks"""
+        while self.running:
+            try:
+                task = self.task_queue.get(timeout=1)
+                if task is None:  # Shutdown signal
+                    break
+                
+                func, args, kwargs, callback, error_callback = task
+                try:
+                    result = func(*args, **kwargs)
+                    if callback:
+                        callback(result)
+                except Exception as e:
+                    if error_callback:
+                        error_callback(e)
+                    else:
+                        print(f"Background task error: {e}")
+                finally:
+                    self.task_queue.task_done()
+            except queue.Empty:
+                continue
+    
+    def submit_task(self, func, callback=None, error_callback=None, *args, **kwargs):
+        """Submit a task to run in background"""
+        self.task_queue.put((func, args, kwargs, callback, error_callback))
+    
+    def shutdown(self):
+        """Shutdown the task manager"""
+        self.running = False
+        self.task_queue.put(None)
+        self.executor.shutdown(wait=True)
+
+# Global task manager instance
+task_manager = BackgroundTaskManager()
+
+# Simple caching system
+class Cache:
+    def __init__(self):
+        self.cache = {}
+        self.cache_timestamps = {}
+        self.cache_duration = 300  # 5 minutes
+    
+    def get(self, key):
+        if key in self.cache:
+            if time.time() - self.cache_timestamps.get(key, 0) < self.cache_duration:
+                return self.cache[key]
+            else:
+                # Cache expired, remove it
+                del self.cache[key]
+                if key in self.cache_timestamps:
+                    del self.cache_timestamps[key]
+        return None
+    
+    def set(self, key, value):
+        self.cache[key] = value
+        self.cache_timestamps[key] = time.time()
+    
+    def clear(self):
+        self.cache.clear()
+        self.cache_timestamps.clear()
+    
+    def invalidate(self, pattern=None):
+        """Invalidate cache entries matching a pattern"""
+        if pattern is None:
+            self.clear()
+        else:
+            keys_to_remove = [key for key in self.cache.keys() if pattern in key]
+            for key in keys_to_remove:
+                del self.cache[key]
+                if key in self.cache_timestamps:
+                    del self.cache_timestamps[key]
+
+# Global cache instance
+cache = Cache()
+
+# Database operation wrappers for background execution
+def run_in_background(func, callback=None, error_callback=None, *args, **kwargs):
+    """Helper function to run database operations in background"""
+    task_manager.submit_task(func, callback, error_callback, *args, **kwargs)
+
 NAV_LABELS = [
     "Dashboard",
-    "Buyer Search",
-    "Potential Buyer Leads",
+    "Quick Buyer Search (AI)",
+    "Verified Buyer Leads (Apollo)",
     "Buyer List",
     "HS Code",
     "Export",
@@ -52,6 +149,473 @@ class DashboardContent(ctk.CTkFrame):
         ctk.CTkLabel(recent_frame, text="Recent Activity", font=("Poppins", 18, "bold"), text_color="#2E3A59").pack(pady=(16,8))
         ctk.CTkLabel(recent_frame, text="No recent activity yet.", font=("Poppins", 15), text_color="#B0BEC5").pack(pady=(0,16))
 
+class BuyerSearchPage(ctk.CTkFrame):
+    def __init__(self, master):
+        super().__init__(master, fg_color="#F5F7FA")
+        self._build_ui()
+        self.search_results = []
+        self.worker = None
+        # Load countries synchronously after widgets are created
+        self.load_countries()
+
+    def _build_ui(self):
+        # Title
+        title_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        title_frame.pack(fill="x", pady=(24, 16), padx=32)
+        ctk.CTkLabel(title_frame, text="Quick Buyer Search (AI)", font=("Poppins", 24, "bold"), text_color="#2E3A59").pack()
+        
+        # Search Parameters Card
+        search_card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
+        search_card.pack(fill="x", padx=32, pady=(0, 16))
+        
+        search_content = ctk.CTkFrame(search_card, fg_color="transparent")
+        search_content.pack(fill="x", padx=20, pady=18)
+        
+        ctk.CTkLabel(search_content, text="Search Parameters", font=("Poppins", 18, "bold"), text_color="#0078D4").pack(anchor="w", pady=(0, 12))
+        
+        # Parameters grid
+        param_frame = ctk.CTkFrame(search_content, fg_color="transparent")
+        param_frame.pack(fill="x", pady=8)
+        param_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # Country selection
+        country_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        country_frame.grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=4)
+        ctk.CTkLabel(country_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(anchor="w")
+        self.country_var = tk.StringVar(value="Select Country")
+        country_display_frame = ctk.CTkFrame(country_frame, fg_color="transparent")
+        country_display_frame.pack(fill="x", pady=(4, 0))
+        self.country_display = ctk.CTkEntry(country_display_frame, textvariable=self.country_var, state="readonly", width=200, font=("Poppins", 15))
+        self.country_display.pack(side="left")
+        select_country_btn = ctk.CTkButton(country_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
+        
+        # HS Code selection
+        hs_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        hs_frame.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=4)
+        ctk.CTkLabel(hs_frame, text="HS Code:", font=("Poppins", 15), text_color="#6B7C93").pack(anchor="w")
+        self.hs_var = tk.StringVar(value="Select HS Code")
+        hs_display_frame = ctk.CTkFrame(hs_frame, fg_color="transparent")
+        hs_display_frame.pack(fill="x", pady=(4, 0))
+        self.hs_display = ctk.CTkEntry(hs_display_frame, textvariable=self.hs_var, state="readonly", width=200, font=("Poppins", 15))
+        self.hs_display.pack(side="left")
+        select_hs_btn = ctk.CTkButton(hs_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_hs_code_selector)
+        select_hs_btn.pack(side="left", padx=(8, 0))
+        
+        # Keyword selection
+        keyword_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        keyword_frame.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=4)
+        ctk.CTkLabel(keyword_frame, text="Product Keyword:", font=("Poppins", 15), text_color="#6B7C93").pack(anchor="w")
+        self.keyword_var = tk.StringVar(value="Select Keyword")
+        keyword_display_frame = ctk.CTkFrame(keyword_frame, fg_color="transparent")
+        keyword_display_frame.pack(fill="x", pady=(4, 0))
+        self.keyword_display = ctk.CTkEntry(keyword_display_frame, textvariable=self.keyword_var, state="readonly", width=200, font=("Poppins", 15))
+        self.keyword_display.pack(side="left")
+        select_keyword_btn = ctk.CTkButton(keyword_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_keyword_selector)
+        select_keyword_btn.pack(side="left", padx=(8, 0))
+        
+        # Custom keyword entry
+        custom_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        custom_frame.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=4)
+        ctk.CTkLabel(custom_frame, text="Custom Keyword:", font=("Poppins", 15), text_color="#6B7C93").pack(anchor="w")
+        self.custom_keyword_var = tk.StringVar()
+        self.custom_keyword_entry = ctk.CTkEntry(custom_frame, textvariable=self.custom_keyword_var, placeholder_text="Enter custom keyword...", width=200, font=("Poppins", 15), state="disabled")
+        self.custom_keyword_entry.pack(fill="x", pady=(4, 0))
+        
+        # Search button
+        button_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        button_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        
+        self.search_btn = ctk.CTkButton(button_frame, text="Search Buyers with AI", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8, command=self.perform_search)
+        self.search_btn.pack(side="right")
+        
+        # Results Card
+        results_card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
+        results_card.pack(fill="both", expand=True, padx=32, pady=(0, 24))
+        
+        results_content = ctk.CTkFrame(results_card, fg_color="transparent")
+        results_content.pack(fill="both", expand=True, padx=20, pady=18)
+        
+        # Info and action buttons row
+        info_action_frame = ctk.CTkFrame(results_content, fg_color="transparent")
+        info_action_frame.pack(fill="x", pady=(0, 12))
+        
+        self.results_info_label = ctk.CTkLabel(info_action_frame, text="", font=("Poppins", 15), text_color="#0078D4", fg_color="#EAF3FF", corner_radius=8)
+        self.results_info_label.pack(side="left", padx=(0, 16))
+        
+        # Action buttons
+        export_btn = ctk.CTkButton(info_action_frame, text="Export Results", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8, width=180, height=40, command=self.export_results)
+        export_btn.pack(side="right", padx=(0, 8))
+        
+        # Table
+        table_frame = ctk.CTkFrame(results_content, fg_color="#FFFFFF", corner_radius=12)
+        table_frame.pack(fill="both", expand=True, pady=(0, 8))
+        
+        style = ttk.Style()
+        style.configure("BuyerSearch.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
+        style.configure("BuyerSearch.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#2E3A59")
+        style.map("BuyerSearch.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
+        
+        self.table = ttk.Treeview(table_frame, columns=("no", "company", "country", "website", "description"), show="headings", style="BuyerSearch.Treeview")
+        self.table.heading("no", text="No.")
+        self.table.heading("company", text="Company Name")
+        self.table.heading("country", text="Country")
+        self.table.heading("website", text="Website")
+        self.table.heading("description", text="Description")
+        self.table.column("no", width=60, anchor="center")
+        self.table.column("company", width=200, anchor="w")
+        self.table.column("country", width=120, anchor="center")
+        self.table.column("website", width=200, anchor="w")
+        self.table.column("description", width=300, anchor="w")
+        self.table.pack(fill="both", expand=True, padx=8, pady=8)
+        
+        # Progress bar
+        self.progress_bar = ctk.CTkProgressBar(results_content, orientation="horizontal", mode="indeterminate", width=320)
+        self.progress_bar.pack(pady=8)
+        self.progress_bar.set(0)
+        self.progress_bar.pack_forget()  # Hide initially
+        
+        # Initialize data
+        self.load_keywords()
+        self.load_hs_codes()
+        
+        # Load countries after a short delay to ensure UI is ready
+        self.after(100, self.load_countries)
+
+    def load_countries(self):
+        """Load available countries from database that have HS codes"""
+        # Check cache first
+        cached_countries = cache.get("buyer_search_countries")
+        if cached_countries:
+            self.country_list = cached_countries
+            return
+        try:
+            hs_codes = GUI_db.get_all_hs_codes()
+            countries_with_hs_codes = set()
+            for code in hs_codes:
+                if code.get('country'):
+                    countries_with_hs_codes.add(code['country'])
+            countries = ["Select Country"] + sorted(list(countries_with_hs_codes))
+            self.country_list = countries
+            cache.set("buyer_search_countries", countries)
+        except Exception as e:
+            print(f"Error loading countries: {e}")
+            self.country_list = ["Select Country"]
+
+    def _update_countries_ui(self, countries):
+        """Update countries list on main thread"""
+        self.country_list = countries
+        # Cache the result
+        cache.set("buyer_search_countries", countries)
+        print(f"[QUICK DEBUG] Updated countries UI: {len(countries)} countries")
+    
+    def _set_default_countries(self):
+        """Set default countries on main thread"""
+        self.country_list = ["Select Country"]
+
+    def load_keywords(self):
+        """Load keyword options from file and add custom option"""
+        try:
+            keyword_file = os.path.join(os.path.dirname(__file__), '..', 'prompts', 'keyword_options.txt')
+            if os.path.exists(keyword_file):
+                with open(keyword_file, 'r', encoding='utf-8') as f:
+                    keywords = [line.strip() for line in f if line.strip()]
+                self.keyword_list = ["Select Keyword"] + keywords + ["Custom Keyword"]
+            else:
+                self.keyword_list = ["Select Keyword", "Custom Keyword"]
+        except Exception as e:
+            print(f"Error loading keywords: {e}")
+            self.keyword_list = ["Select Keyword", "Custom Keyword"]
+
+    def load_hs_codes(self):
+        """Load HS codes based on selected country"""
+        try:
+            # Default to empty list, will be populated when country is selected
+            self.hs_code_list = ["Select HS Code"]
+        except Exception as e:
+            print(f"Error loading HS codes: {e}")
+            self.hs_code_list = ["Select HS Code"]
+
+    def open_country_selector(self):
+        """Open country selection dialog"""
+        dialog = CountrySelectorDialog(self, self.country_list)
+        self.wait_window(dialog)
+        selected_country = dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            self.country_var.set(selected_country)
+            # Update HS codes for selected country
+            self.update_hs_codes_for_country(selected_country)
+            # Reset keyword selection when country changes
+            self.reset_keyword_selection()
+
+    def open_hs_code_selector(self):
+        """Open HS code selection dialog"""
+        country = self.country_var.get().strip()
+        if country == "Select Country" or not country:
+            messagebox.showwarning("Select Country First", "Please select a country first to see available HS codes.")
+            return
+        
+        # Show loading indicator
+        loading_dialog = ctk.CTkToplevel(self)
+        loading_dialog.title("Loading")
+        loading_dialog.geometry("300x100")
+        loading_dialog.grab_set()
+        loading_dialog.transient(self)
+        
+        ctk.CTkLabel(loading_dialog, text="Loading HS codes...", font=("Poppins", 14)).pack(pady=20)
+        progress_bar = ctk.CTkProgressBar(loading_dialog, mode="indeterminate")
+        progress_bar.pack(pady=10)
+        progress_bar.start()
+        
+        def load_hs_codes_task():
+            try:
+                hs_codes = GUI_db.get_hs_codes_by_country(country)
+                hs_options = ["Select HS Code"]
+                for code in hs_codes:
+                    hs_options.append(f"{code['hs_code']} - {code['description']}")
+                return hs_options
+            except Exception as e:
+                print(f"Error loading HS codes for country: {e}")
+                return None
+        
+        def on_hs_codes_loaded(hs_options):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._handle_hs_codes_loaded(hs_options, loading_dialog, country))
+        
+        def on_error(error):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._handle_hs_codes_error(error, loading_dialog, country))
+        
+        # Run in background
+        run_in_background(load_hs_codes_task, on_hs_codes_loaded, on_error)
+    
+    def _handle_hs_codes_loaded(self, hs_options, loading_dialog, country):
+        """Handle HS codes loaded on main thread"""
+        loading_dialog.destroy()
+        if hs_options is None:
+            messagebox.showerror("Error", f"Error loading HS codes for {country}")
+            return
+        
+        dialog = HSCodeSelectorDialog(self, hs_options)
+        self.wait_window(dialog)
+        selected_hs = dialog.get_selected()
+        if selected_hs and selected_hs != "Select HS Code":
+            self.hs_var.set(selected_hs)
+    
+    def _handle_hs_codes_error(self, error, loading_dialog, country):
+        """Handle HS codes error on main thread"""
+        loading_dialog.destroy()
+        print(f"Error loading HS codes for country: {error}")
+        messagebox.showerror("Error", f"Error loading HS codes for {country}")
+
+    def open_keyword_selector(self):
+        """Open keyword selection dialog"""
+        dialog = KeywordSelectorDialog(self, self.keyword_list)
+        self.wait_window(dialog)
+        selected_keyword = dialog.get_selected()
+        if selected_keyword and selected_keyword != "Select Keyword":
+            if selected_keyword == "Custom Keyword":
+                # Enable custom keyword entry and clear other selections
+                self.keyword_var.set("Custom Keyword")
+                self.custom_keyword_entry.configure(state="normal")
+                self.custom_keyword_entry.focus()
+            else:
+                # Disable custom keyword entry and set the selected keyword
+                self.keyword_var.set(selected_keyword)
+                self.custom_keyword_entry.configure(state="disabled")
+                self.custom_keyword_var.set("")
+
+    def reset_keyword_selection(self):
+        """Reset keyword selection to default state"""
+        self.keyword_var.set("Select Keyword")
+        self.custom_keyword_entry.configure(state="disabled")
+        self.custom_keyword_var.set("")
+
+    def update_hs_codes_for_country(self, country):
+        """Update HS codes when country changes"""
+        try:
+            if country == "Select Country":
+                self.hs_code_list = ["Select HS Code"]
+            else:
+                hs_codes = GUI_db.get_hs_codes_by_country(country)
+                self.hs_code_list = ["Select HS Code"] + [f"{code['hs_code']} - {code['description']}" for code in hs_codes]
+            self.hs_var.set("Select HS Code")
+        except Exception as e:
+            print(f"Error updating HS codes for country: {e}")
+
+    def refresh_buyer_search_data(self):
+        """Refresh BuyerSearchPage data after new HS codes are added"""
+        # Invalidate cache
+        cache.invalidate("buyer_search_countries")
+        cache.invalidate("hs_codes")
+        self.load_countries()
+
+    def perform_search(self):
+        """Perform AI buyer search"""
+        country = self.country_var.get().strip()
+        hs_selection = self.hs_var.get().strip()
+        keyword = self.keyword_var.get().strip()
+        custom_keyword = self.custom_keyword_var.get().strip()
+        
+        # Validation
+        if country == "Select Country" or not country:
+            messagebox.showwarning("Missing Country", "Please select a country.")
+            return
+            
+        if hs_selection == "Select HS Code" or not hs_selection:
+            messagebox.showwarning("Missing HS Code", "Please select an HS code.")
+            return
+            
+        # Check if custom keyword is selected but no custom keyword entered
+        if keyword == "Custom Keyword":
+            if not custom_keyword:
+                messagebox.showwarning("Missing Custom Keyword", "Please enter a custom keyword.")
+                return
+            final_keyword = custom_keyword
+        elif keyword == "Select Keyword" or not keyword:
+            messagebox.showwarning("Missing Keyword", "Please select a keyword or choose custom keyword.")
+            return
+        else:
+            final_keyword = keyword
+        
+        # Extract HS code from selection
+        hs_code = hs_selection.split(" - ")[0] if " - " in hs_selection else hs_selection
+        
+        # Start search
+        self.search_btn.configure(state="disabled")
+        self.progress_bar.pack(pady=8)
+        self.progress_bar.start()
+        
+        def run_ai_search():
+            try:
+                import deepseek_agent
+                import db
+                
+                print(f"[DEBUG] Starting DeepSeek search with parameters:")
+                print(f"[DEBUG] HS Code: {hs_code}")
+                print(f"[DEBUG] Keyword: {final_keyword}")
+                print(f"[DEBUG] Country: {country}")
+                
+                # Query DeepSeek for buyers
+                print("[DEBUG] Calling deepseek_agent.query_deepseek...")
+                result = deepseek_agent.query_deepseek(hs_code, final_keyword, country, [])
+                print(f"[DEBUG] DeepSeek raw result received: {len(str(result))} characters")
+                print(f"[DEBUG] First 500 chars of result: {str(result)[:500]}...")
+                
+                # Parse results
+                print("[DEBUG] Parsing DeepSeek output...")
+                companies = db.parse_deepseek_output(result)
+                print(f"[DEBUG] Parsed {len(companies) if companies else 0} companies from result")
+                
+                # Debug: Show what fields each company has
+                if companies:
+                    print("[DEBUG] Sample company data:")
+                    for i, company in enumerate(companies[:3]):  # Show first 3 companies
+                        print(f"[DEBUG] Company {i+1}:")
+                        print(f"[DEBUG]   Name: {company.get('company_name', 'MISSING')}")
+                        print(f"[DEBUG]   Country: {company.get('company_country', 'MISSING')}")
+                        print(f"[DEBUG]   Website: {company.get('company_website_link', 'MISSING')}")
+                        print(f"[DEBUG]   Description: {company.get('description', 'MISSING')[:100]}...")
+                
+                # Save to database
+                if companies:
+                    print("[DEBUG] Saving companies to database...")
+                    # Use the new deepseek_buyer_search_results table
+                    saved_count = GUI_db.insert_deepseek_results(hs_code, final_keyword, country, companies)
+                    print(f"[DEBUG] Saved {saved_count} companies to deepseek_buyer_search_results table")
+                
+                def on_complete():
+                    self.search_btn.configure(state="normal")
+                    self.progress_bar.stop()
+                    self.progress_bar.pack_forget()
+                    
+                    if not companies:
+                        self.results_info_label.configure(text="")
+                        messagebox.showinfo("No Results", "No buyers found for the specified criteria.")
+                        return
+                    
+                    self.search_results = companies
+                    self.populate_table(companies)
+                    self.results_info_label.configure(text=f"Found {len(companies)} potential buyers")
+                    
+                    # Auto-refresh country list after successful search
+                    self.load_countries()
+                    
+                    messagebox.showinfo("Search Complete", f"Found and saved {len(companies)} potential buyers to the database.")
+                
+                self.after(0, on_complete)
+                
+            except Exception as search_error:
+                print(f"[DEBUG] Error during AI search: {search_error}")
+                print(f"[DEBUG] Error type: {type(search_error)}")
+                import traceback
+                print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
+                
+                def on_error(error=search_error):
+                    self.search_btn.configure(state="normal")
+                    self.progress_bar.stop()
+                    self.progress_bar.pack_forget()
+                    messagebox.showerror("Search Error", f"Error during AI search: {str(error)}")
+                self.after(0, on_error)
+        
+        threading.Thread(target=run_ai_search, daemon=True).start()
+
+    def populate_table(self, data):
+        """Populate the results table"""
+        for row in self.table.get_children():
+            self.table.delete(row)
+        
+        for i, company in enumerate(data):
+            self.table.insert("", "end", values=(
+                str(i + 1),
+                company.get('company_name', ''),
+                company.get('company_country', ''),
+                company.get('company_website_link', ''),
+                company.get('description', '')
+            ))
+
+    def export_results(self):
+        """Export results to CSV"""
+        if not self.search_results:
+            messagebox.showwarning("No Data", "No results to export.")
+            return
+            
+        try:
+            # Generate default filename
+            country = self.country_var.get()
+            hs_code = self.hs_var.get().split(" - ")[0] if " - " in self.hs_var.get() else self.hs_var.get()
+            default_filename = f"{country}_{hs_code}_buyers.csv"
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                title="Export Buyer Search Results",
+                initialfile=default_filename
+            )
+            
+            if filename:
+                with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    writer = csv.writer(csvfile)
+                    # Write headers
+                    headers = ["No.", "Company Name", "Country", "Website", "Description"]
+                    writer.writerow(headers)
+                    
+                    # Write data
+                    for i, company in enumerate(self.search_results):
+                        writer.writerow([
+                            str(i + 1),
+                            company.get('company_name', ''),
+                            company.get('company_country', ''),
+                            company.get('company_website_link', ''),
+                            company.get('description', '')
+                        ])
+                
+                messagebox.showinfo("Export Complete", f"Results exported to {filename}")
+                
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Error exporting results: {e}")
+
+
 class WorkInProgress(ctk.CTkFrame):
     def __init__(self, master, label):
         super().__init__(master, fg_color="#F5F7FA")
@@ -61,6 +625,8 @@ class HSCodePage(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="#F5F7FA")
         self._build_ui()
+        # Populate table by default
+        self.populate_table()
 
     def _build_ui(self):
         # Top bar: Add HS Code button (right)
@@ -75,9 +641,17 @@ class HSCodePage(ctk.CTkFrame):
         filter_frame.pack(fill="x", pady=(18, 0), padx=32)
         ctk.CTkLabel(filter_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(0, 8))
         self.country_var = tk.StringVar(value="All")
-        countries = ["All"] + GUI_db.get_all_available_countries()
-        self.country_combo = ctk.CTkComboBox(filter_frame, variable=self.country_var, values=countries, width=160, font=("Poppins", 15))
-        self.country_combo.pack(side="left", padx=(0, 16))
+        country_frame = ctk.CTkFrame(filter_frame, fg_color="transparent")
+        country_frame.pack(side="left", padx=(0, 16))
+        
+        # Country display (read-only)
+        self.country_display = ctk.CTkEntry(country_frame, textvariable=self.country_var, state="readonly", width=160, font=("Poppins", 15))
+        self.country_display.pack(side="left")
+        
+        # Select country button
+        select_country_btn = ctk.CTkButton(country_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(filter_frame, text="HS Code:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left", padx=(16, 8))
         self.search_var = tk.StringVar()
         search_entry = ctk.CTkEntry(filter_frame, textvariable=self.search_var, placeholder_text="Enter HS code or description...", width=220, font=("Poppins", 15))
         search_entry.pack(side="left", padx=(0, 12))
@@ -93,12 +667,12 @@ class HSCodePage(ctk.CTkFrame):
         style.configure("Zen.Treeview", font=("Poppins", 13), rowheight=32, background="#FFFFFF", fieldbackground="#FFFFFF", foreground="#2E3A59")
         style.configure("Zen.Treeview.Heading", font=("Poppins", 14, "bold"), background="#F5F7FA", foreground="#0078D4")
         style.map("Zen.Treeview", background=[("selected", "#1E3A8A")], foreground=[("selected", "#FFFFFF")])
-        self.table = ttk.Treeview(table_frame, columns=("hs_code", "country", "desc"), show="headings", style="Zen.Treeview")
-        self.table.heading("hs_code", text="HS Code")
+        self.table = ttk.Treeview(table_frame, columns=("country", "hs_code", "desc"), show="headings", style="Zen.Treeview")
         self.table.heading("country", text="Country")
+        self.table.heading("hs_code", text="HS Code")
         self.table.heading("desc", text="Description")
-        self.table.column("hs_code", width=120, anchor="center")
         self.table.column("country", width=120, anchor="center")
+        self.table.column("hs_code", width=120, anchor="center")
         self.table.column("desc", width=400, anchor="w")
         self.table.pack(fill="both", expand=True, padx=8, pady=8)
         self.populate_table()
@@ -112,21 +686,86 @@ class HSCodePage(ctk.CTkFrame):
         delete_btn.pack(side="right", padx=(0, 12))
 
     def populate_table(self):
+        def load_table_data():
+            country = self.country_var.get()
+            query = self.search_var.get().strip().lower()
+            
+            if country == "All":
+                data = GUI_db.get_all_hs_codes()
+            else:
+                data = GUI_db.get_hs_codes_by_country(country)
+            
+            # Filter data
+            filtered_data = []
+            for entry in data:
+                if query and query not in entry['hs_code'].lower() and query not in entry['description'].lower():
+                    continue
+                filtered_data.append(entry)
+            
+            return filtered_data
+        
+        def on_data_loaded(data):
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._update_table_ui(data))
+        
+        def on_error(error):
+            print(f"Error loading table data: {error}")
+            # Schedule UI update on main thread
+            self.after(0, lambda: self._clear_table_ui())
+        
+        # Run in background
+        run_in_background(load_table_data, on_data_loaded, on_error)
+    
+    def _update_table_ui(self, data):
+        """Update table on main thread"""
+        # Clear existing rows
         for row in self.table.get_children():
             self.table.delete(row)
-        country = self.country_var.get()
-        query = self.search_var.get().strip().lower()
-        if country == "All":
-            data = GUI_db.get_all_hs_codes()
-        else:
-            data = GUI_db.get_hs_codes_by_country(country)
+        
+        # Insert new data
         for entry in data:
-            if query and query not in entry['hs_code'].lower() and query not in entry['description'].lower():
-                continue
-            self.table.insert("", "end", iid=entry['id'], values=(entry['hs_code'], entry['country'], entry['description']))
+            self.table.insert("", "end", iid=entry['id'], values=(entry['country'], entry['hs_code'], entry['description']))
+    
+    def _clear_table_ui(self):
+        """Clear table on main thread"""
+        for row in self.table.get_children():
+            self.table.delete(row)
 
     def do_search(self):
         self.populate_table()
+
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        # Get countries that have HS codes in the database
+        try:
+            hs_codes = GUI_db.get_all_hs_codes()
+            countries_with_hs_codes = set()
+            for code in hs_codes:
+                if code.get('country'):
+                    countries_with_hs_codes.add(code['country'])
+            
+            # Sort the countries and add "All" option
+            country_list = ["All"] + sorted(list(countries_with_hs_codes))
+        except Exception as e:
+            print(f"Error loading countries for HS Code Manager: {e}")
+            country_list = ["All"]
+        
+        dialog = CountrySelectorDialog(self, country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country:
+            self.country_var.set(selected_country)
+            # Refresh the table with the new country filter
+            self.populate_table()
+
+    def open_add_country_selector(self, dialog, country_var):
+        """Open a searchable country selection dialog for Add HS Code"""
+        country_list = ["Select Country"] + GUI_db.get_all_available_countries()
+        selector_dialog = CountrySelectorDialog(dialog, country_list)
+        dialog.wait_window(selector_dialog)  # Wait for dialog to close
+        selected_country = selector_dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            country_var.set(selected_country)
 
     def add_hs_code(self):
         dialog = ctk.CTkToplevel(self)
@@ -140,10 +779,13 @@ class HSCodePage(ctk.CTkFrame):
         country_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
         country_frame.pack(fill="x", padx=24, pady=8)
         ctk.CTkLabel(country_frame, text="Country:", font=("Poppins", 15)).pack(anchor="w", pady=(12, 4))
-        country_var = tk.StringVar()
-        countries = GUI_db.get_all_available_countries()
-        country_combo = ctk.CTkComboBox(country_frame, variable=country_var, values=countries, font=("Poppins", 14))
-        country_combo.pack(fill="x", pady=4)
+        country_var = tk.StringVar(value="Select Country")
+        country_display_frame = ctk.CTkFrame(country_frame, fg_color="transparent")
+        country_display_frame.pack(fill="x", pady=4)
+        country_display = ctk.CTkEntry(country_display_frame, textvariable=country_var, state="readonly", font=("Poppins", 14))
+        country_display.pack(side="left", fill="x", expand=True)
+        select_country_btn = ctk.CTkButton(country_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=lambda: self.open_add_country_selector(dialog, country_var))
+        select_country_btn.pack(side="right", padx=(8, 0))
         
         # HS Code input
         hs_frame = ctk.CTkFrame(dialog, fg_color="#F5F7FA")
@@ -183,6 +825,9 @@ class HSCodePage(ctk.CTkFrame):
             if GUI_db.save_hs_code(hs, desc, country):
                 dialog.destroy()
                 self.populate_table()
+                
+                # Refresh other pages that depend on HS codes
+                self.refresh_other_pages()
             else:
                 messagebox.showerror("Duplicate", "This HS code for the selected country already exists.")
         
@@ -231,6 +876,9 @@ class HSCodePage(ctk.CTkFrame):
                         messagebox.showinfo("Saved", f"Saved {saved_count} HS codes to the database.")
                         dialog.destroy()
                         self.populate_table()
+                        
+                        # Refresh other pages that depend on HS codes
+                        self.refresh_other_pages()
                     else:
                         progress_label.configure(text="")
                         messagebox.showinfo("DeepSeek Results", "No HS codes were saved.")
@@ -281,6 +929,8 @@ class HSCodePage(ctk.CTkFrame):
             if GUI_db.update_hs_code(hs_id, hs, desc, country):
                 dialog.destroy()
                 self.populate_table()
+                # Refresh other pages that depend on HS codes
+                self.refresh_other_pages()
             else:
                 messagebox.showerror("Error", "Failed to update HS code.")
         ctk.CTkButton(dialog, text="Save", fg_color="#0078D4", text_color="#FFFFFF", font=("Poppins", 15, "bold"), command=on_save).pack(pady=(18, 8))
@@ -294,8 +944,29 @@ class HSCodePage(ctk.CTkFrame):
         if messagebox.askyesno("Delete HS Code", "Are you sure you want to delete this HS code?"):
             if GUI_db.delete_hs_code(hs_id):
                 self.populate_table()
+                # Refresh other pages that depend on HS codes
+                self.refresh_other_pages()
             else:
                 messagebox.showerror("Error", "Failed to delete HS code.")
+
+    def refresh_other_pages(self):
+        """Refresh other pages that depend on HS codes"""
+        try:
+            # Invalidate cache
+            cache.invalidate("buyer_search_countries")
+            cache.invalidate("hs_codes")
+            cache.invalidate("apollo_countries")
+            cache.invalidate("apollo_companies")
+            
+            # Find the main app instance to access other pages
+            main_app = self.winfo_toplevel()
+            if hasattr(main_app, 'pages'):
+                # Refresh BuyerSearchPage country list
+                buyer_search_page = main_app.pages[1]  # Index 1 is BuyerSearchPage
+                if hasattr(buyer_search_page, 'refresh_buyer_search_data'):
+                    buyer_search_page.refresh_buyer_search_data()
+        except Exception as e:
+            print(f"Error refreshing other pages: {e}")
 
 
 
@@ -393,6 +1064,8 @@ class ApolloPage(ctk.CTkFrame):
         super().__init__(master, fg_color="#F5F7FA")
         self._build_ui()
         self.worker = None
+        self.load_companies()
+        self.load_countries()
 
     def _build_ui(self):
         # Title
@@ -420,8 +1093,16 @@ class ApolloPage(ctk.CTkFrame):
         # Country selection
         ctk.CTkLabel(param_frame, text="Country:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left")
         self.country_var = tk.StringVar(value="Select Country")
-        self.country_combo = ctk.CTkComboBox(param_frame, variable=self.country_var, values=["Select Country"], width=200, font=("Poppins", 15), command=self.update_company_completer)
-        self.country_combo.pack(side="left", padx=(8, 24))
+        country_frame = ctk.CTkFrame(param_frame, fg_color="transparent")
+        country_frame.pack(side="left", padx=(8, 24))
+        
+        # Country display (read-only)
+        self.country_display = ctk.CTkEntry(country_frame, textvariable=self.country_var, state="readonly", width=200, font=("Poppins", 15))
+        self.country_display.pack(side="left")
+        
+        # Select country button
+        select_country_btn = ctk.CTkButton(country_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
+        select_country_btn.pack(side="left", padx=(8, 0))
         
         # Company selection
         ctk.CTkLabel(param_frame, text="Company:", font=("Poppins", 15), text_color="#6B7C93").pack(side="left")
@@ -493,17 +1174,9 @@ class ApolloPage(ctk.CTkFrame):
         self.progress_bar.pack_forget()  # Hide initially
         
         # Initialize data
-        self.load_countries()
         self.load_companies()
-
-    def load_countries(self):
-        """Load available countries from database"""
-        try:
-            from GUI_db import get_available_countries
-            countries = ["Select Country"] + sorted(get_available_countries())
-            self.country_combo.configure(values=countries)
-        except Exception as e:
-            print(f"Error loading countries: {e}")
+        self.load_countries()
+        self.update_company_completer()
 
     def update_company_completer(self, *args):
         """Update the company completer based on selected country"""
@@ -512,23 +1185,39 @@ class ApolloPage(ctk.CTkFrame):
             selected_country = self.country_var.get().strip()
             companies = get_all_companies()
             company_names = ["Type or select a company..."]
-            
-            
-            
             for company in companies:
                 if selected_country == "Select Country" or not selected_country or company.get('country', '').strip() == selected_country:
                     name = company.get('company_name', '')
                     if name:
                         company_names.append(name)
-            
-
-            
-            # Store the filtered companies for the selector dialog
             self.filtered_companies = company_names
-            # Reset to first option
             self.company_var.set("Type or select a company...")
         except Exception as e:
             print(f"Error updating company completer: {e}")
+
+    def load_countries(self):
+        """Load available countries from database that have companies"""
+        try:
+            companies = GUI_db.get_all_companies()
+            countries_with_companies = set()
+            for company in companies:
+                if company.get('country'):
+                    countries_with_companies.add(company['country'])
+            countries = ["Select Country"] + sorted(list(countries_with_companies))
+            self.country_list = countries
+        except Exception as e:
+            print(f"Error loading Apollo countries: {e}")
+            self.country_list = ["Select Country"]
+
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        dialog = CountrySelectorDialog(self, self.country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            self.country_var.set(selected_country)
+            # Update company completer when country changes
+            self.update_company_completer()
 
     def open_company_selector(self):
         """Open a searchable company selection dialog"""
@@ -542,6 +1231,11 @@ class ApolloPage(ctk.CTkFrame):
     def load_companies(self):
         """Load companies from database"""
         self.update_company_completer()
+
+    def refresh_apollo_data(self):
+        """Refresh Apollo page data after new companies are added"""
+        self.load_countries()
+        self.load_companies()
 
     def do_search(self):
         """Perform Apollo search for decision makers"""
@@ -616,6 +1310,11 @@ class ApolloPage(ctk.CTkFrame):
                     from utils.display import truncate_company_name
                     truncated_company = truncate_company_name(company_name)
                     self.results_info_label.configure(text=f"Number of {len(results)} buyer leads found for {truncated_company}")
+                    
+                    # Auto-refresh country and company lists after successful search
+                    self.load_countries()
+                    self.load_companies()
+                    
                     messagebox.showinfo("Search Complete", f"Found and saved {len(results)} decision makers to the database.")
                 
                 self.after(0, on_complete)
@@ -691,9 +1390,7 @@ class ApolloPage(ctk.CTkFrame):
     def open_search_dialog(self):
         """Open the Apollo search dialog"""
         dialog = ApolloSearchDialog(self)
-        # Refresh the companies list after successful search
-        self.load_companies()
-        self.load_countries()
+        # The refresh will be handled by the dialog's on_complete callback
 
     def check_duplicates(self):
         """Check the whole database for duplicate companies"""
@@ -752,14 +1449,10 @@ class ApolloSearchDialog(ctk.CTkToplevel):
         self.country_var = tk.StringVar(value="Select Country")
         country_display_frame = ctk.CTkFrame(country_frame, fg_color="transparent")
         country_display_frame.pack(side="right", fill="x", expand=True, padx=(8, 0))
-        
-        # Country display (read-only)
-        self.country_display = ctk.CTkEntry(country_display_frame, textvariable=self.country_var, state="readonly", width=200, font=("Poppins", 14))
-        self.country_display.pack(side="left")
-        
-        # Select country button
+        self.country_display = ctk.CTkEntry(country_display_frame, textvariable=self.country_var, state="readonly", font=("Poppins", 14))
+        self.country_display.pack(side="left", fill="x", expand=True)
         select_country_btn = ctk.CTkButton(country_display_frame, text="Select", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 12, "bold"), width=60, height=32, command=self.open_country_selector)
-        select_country_btn.pack(side="left", padx=(8, 0))
+        select_country_btn.pack(side="right", padx=(8, 0))
         
         # Search depth
         depth_frame = ctk.CTkFrame(params_frame, fg_color="transparent")
@@ -808,9 +1501,21 @@ class ApolloSearchDialog(ctk.CTkToplevel):
             'Brunei', 'Timor-Leste', 'Maldives', 'Bhutan'
         ]
 
+    def open_country_selector(self):
+        """Open a searchable country selection dialog"""
+        country_list = ["Select Country"] + self._get_all_countries()
+        dialog = CountrySelectorDialog(self, country_list)
+        self.wait_window(dialog)  # Wait for dialog to close
+        selected_country = dialog.get_selected()
+        if selected_country and selected_country != "Select Country":
+            self.country_var.set(selected_country)
+
     def start_search(self):
         """Start the Apollo company search"""
         country = self.country_var.get().strip()
+        if country == "Select Country" or not country:
+            messagebox.showwarning("Missing Country", "Please select a country.")
+            return
         depth_text = self.depth_var.get()
         
         # Parse search depth
@@ -894,6 +1599,11 @@ class ApolloSearchDialog(ctk.CTkToplevel):
                     self.progress_bar.stop()
                     self.progress_bar.pack_forget()
                     messagebox.showinfo("Search Complete", f"Found and saved {total_saved} new companies to the database.")
+                    
+                    # Refresh the parent Apollo page after successful search
+                    if hasattr(self.master, 'refresh_apollo_data'):
+                        self.master.refresh_apollo_data()
+                    
                     self.destroy()
                 
                 self.after(0, on_complete)
@@ -1075,6 +1785,248 @@ class CompanySelectorDialog(ctk.CTkToplevel):
         return self.selected_company
 
 
+class CountrySelectorDialog(ctk.CTkToplevel):
+    def __init__(self, parent, country_list):
+        super().__init__(parent)
+        self.title("Select Country")
+        self.geometry("500x400")
+        self.grab_set()
+        
+        self.country_list = country_list
+        self.selected_country = None
+        
+        ctk.CTkLabel(self, text="Select a country:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
+        
+        # Search frame
+        search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        search_frame.pack(fill="x", padx=24, pady=(0, 12))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search)
+        search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search countries...", font=("Poppins", 14))
+        search_entry.pack(fill="x", padx=16, pady=16)
+        
+        # Scrollable frame for countries
+        self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
+        self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        
+        # Country buttons (will be populated)
+        self.country_buttons = []
+        self.populate_countries(self.country_list)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+
+    def populate_countries(self, countries):
+        """Populate the scrollable frame with country buttons"""
+        # Clear existing buttons
+        for btn in self.country_buttons:
+            btn.destroy()
+        self.country_buttons.clear()
+        
+        # Add country buttons
+        for country in countries:
+            if country != "Select Country":
+                btn = ctk.CTkButton(
+                    self.scroll_frame,
+                    text=country, 
+                    fg_color="#FFFFFF", 
+                    hover_color="#EAF3FF",
+                    text_color="#2E3A59", 
+                    font=("Poppins", 13),
+                    anchor="w",
+                    command=lambda c=country: self.select_country(c)
+                )
+                btn.pack(fill="x", padx=8, pady=2)
+                self.country_buttons.append(btn)
+
+    def on_search(self, *args):
+        """Filter countries based on search term"""
+        search_term = self.search_var.get().lower()
+        filtered_countries = []
+        
+        for country in self.country_list:
+            if search_term in country.lower():
+                filtered_countries.append(country)
+        
+        self.populate_countries(filtered_countries)
+
+    def select_country(self, country):
+        """Select a country and close dialog"""
+        self.selected_country = country
+        self.destroy()
+
+    def get_selected(self):
+        """Return the selected country"""
+        return self.selected_country
+
+
+class HSCodeSelectorDialog(ctk.CTkToplevel):
+    def __init__(self, parent, hs_code_list):
+        super().__init__(parent)
+        self.title("Select HS Code")
+        self.geometry("600x400")
+        self.grab_set()
+        
+        self.hs_code_list = hs_code_list
+        self.selected_hs_code = None
+        
+        ctk.CTkLabel(self, text="Select an HS Code:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
+        
+        # Search frame
+        search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        search_frame.pack(fill="x", padx=24, pady=(0, 12))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search)
+        search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search HS codes...", font=("Poppins", 14))
+        search_entry.pack(fill="x", padx=16, pady=16)
+        
+        # Scrollable frame for HS codes
+        self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
+        self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        
+        # HS code buttons (will be populated)
+        self.hs_code_buttons = []
+        self.populate_hs_codes(self.hs_code_list)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+
+    def populate_hs_codes(self, hs_codes):
+        """Populate the scrollable frame with HS code buttons"""
+        # Clear existing buttons
+        for btn in self.hs_code_buttons:
+            btn.destroy()
+        self.hs_code_buttons.clear()
+        
+        # Add HS code buttons
+        for hs_code in hs_codes:
+            if hs_code != "Select HS Code":
+                # Truncate long descriptions for display
+                display_text = hs_code
+                if len(display_text) > 60:
+                    display_text = display_text[:57] + "..."
+                
+                btn = ctk.CTkButton(
+                    self.scroll_frame,
+                    text=display_text, 
+                    fg_color="#FFFFFF", 
+                    hover_color="#EAF3FF",
+                    text_color="#2E3A59", 
+                    font=("Poppins", 12),
+                    anchor="w",
+                    command=lambda hc=hs_code: self.select_hs_code(hc)
+                )
+                btn.pack(fill="x", padx=8, pady=2)
+                self.hs_code_buttons.append(btn)
+
+    def on_search(self, *args):
+        """Filter HS codes based on search term"""
+        search_term = self.search_var.get().lower()
+        filtered_hs_codes = []
+        
+        for hs_code in self.hs_code_list:
+            if search_term in hs_code.lower():
+                filtered_hs_codes.append(hs_code)
+        
+        self.populate_hs_codes(filtered_hs_codes)
+
+    def select_hs_code(self, hs_code):
+        """Select an HS code and close dialog"""
+        self.selected_hs_code = hs_code
+        self.destroy()
+
+    def get_selected(self):
+        """Return the selected HS code"""
+        return self.selected_hs_code
+
+
+class KeywordSelectorDialog(ctk.CTkToplevel):
+    def __init__(self, parent, keyword_list):
+        super().__init__(parent)
+        self.title("Select Keyword")
+        self.geometry("500x400")
+        self.grab_set()
+        
+        self.keyword_list = keyword_list
+        self.selected_keyword = None
+        
+        ctk.CTkLabel(self, text="Select a keyword:", font=("Poppins", 16, "bold"), text_color="#2E3A59").pack(pady=(24, 12))
+        
+        # Search frame
+        search_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        search_frame.pack(fill="x", padx=24, pady=(0, 12))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace("w", self.on_search)
+        search_entry = ctk.CTkEntry(search_frame, textvariable=self.search_var, placeholder_text="Search keywords...", font=("Poppins", 14))
+        search_entry.pack(fill="x", padx=16, pady=16)
+        
+        # Scrollable frame for keywords
+        self.scroll_frame = ctk.CTkScrollableFrame(self, height=250)
+        self.scroll_frame.pack(fill="both", expand=True, padx=24, pady=(0, 12))
+        
+        # Keyword buttons (will be populated)
+        self.keyword_buttons = []
+        self.populate_keywords(self.keyword_list)
+        
+        # Buttons
+        button_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
+        button_frame.pack(fill="x", padx=24, pady=(0, 24))
+        
+        ctk.CTkButton(button_frame, text="Cancel", fg_color="#B0BEC5", text_color="#FFFFFF", font=("Poppins", 14), command=self.destroy).pack(side="right")
+
+    def populate_keywords(self, keywords):
+        """Populate the scrollable frame with keyword buttons"""
+        # Clear existing buttons
+        for btn in self.keyword_buttons:
+            btn.destroy()
+        self.keyword_buttons.clear()
+        
+        # Add keyword buttons
+        for keyword in keywords:
+            if keyword != "Select Keyword":
+                btn = ctk.CTkButton(
+                    self.scroll_frame,
+                    text=keyword, 
+                    fg_color="#FFFFFF", 
+                    hover_color="#EAF3FF",
+                    text_color="#2E3A59", 
+                    font=("Poppins", 13),
+                    anchor="w",
+                    command=lambda k=keyword: self.select_keyword(k)
+                )
+                btn.pack(fill="x", padx=8, pady=2)
+                self.keyword_buttons.append(btn)
+
+    def on_search(self, *args):
+        """Filter keywords based on search term"""
+        search_term = self.search_var.get().lower()
+        filtered_keywords = []
+        
+        for keyword in self.keyword_list:
+            if search_term in keyword.lower():
+                filtered_keywords.append(keyword)
+        
+        self.populate_keywords(filtered_keywords)
+
+    def select_keyword(self, keyword):
+        """Select a keyword and close dialog"""
+        self.selected_keyword = keyword
+        self.destroy()
+
+    def get_selected(self):
+        """Return the selected keyword"""
+        return self.selected_keyword
+
+
 class MainApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -1082,23 +2034,40 @@ class MainApp(ctk.CTk):
         # Launch in fullscreen more reliably
         self.after(10, self.maximize_window)
         self.configure(bg="#F5F7FA")
-        self.sidebar = ctk.CTkFrame(self, fg_color="#F5F7FA", width=220, corner_radius=0)
+        
+        # Sidebar with increased width for longer names
+        self.sidebar = ctk.CTkFrame(self, fg_color="#F5F7FA", width=280, corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
+        
         # Branding/logo placeholder
         ctk.CTkLabel(self.sidebar, text="LOGO", font=("Poppins", 22, "bold"), text_color="#0078D4").pack(pady=(32, 24))
+        
         # Nav buttons
         self.nav_btns = []
         for i, label in enumerate(NAV_LABELS):
-            btn = ctk.CTkButton(self.sidebar, text=label, font=("Poppins", 16, "bold"), fg_color="#F5F7FA", text_color="#6B7C93", hover_color="#E0E4EA", corner_radius=8, anchor="w", width=180, height=44, command=lambda idx=i: self.switch_page(idx))
+            btn = ctk.CTkButton(
+                self.sidebar, 
+                text=label, 
+                font=("Poppins", 15, "bold"), 
+                fg_color="#F5F7FA", 
+                text_color="#6B7C93", 
+                hover_color="#E0E4EA", 
+                corner_radius=8, 
+                anchor="w", 
+                height=44, 
+                command=lambda idx=i: self.switch_page(idx)
+            )
             btn.pack(fill="x", padx=16, pady=2)
             self.nav_btns.append(btn)
+        
         # Main content area
         self.content_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         self.content_frame.pack(side="left", fill="both", expand=True)
+        
         self.pages = [
             DashboardContent(self.content_frame),
-            WorkInProgress(self.content_frame, "Buyer Search"),
+            BuyerSearchPage(self.content_frame),
             ApolloPage(self.content_frame),
             WorkInProgress(self.content_frame, "Buyer List"),
             HSCodePage(self.content_frame),
@@ -1109,6 +2078,8 @@ class MainApp(ctk.CTk):
             page.place(relx=0, rely=0, relwidth=1, relheight=1)
             page.lower()
         self.switch_page(0)
+    
+
     
     def maximize_window(self):
         """Maximize the window reliably"""
@@ -1126,7 +2097,13 @@ class MainApp(ctk.CTk):
                 page.lift()
             else:
                 page.lower()
+    
+    def on_closing(self):
+        """Handle app shutdown"""
+        task_manager.shutdown()
+        self.quit()
 
 if __name__ == "__main__":
     app = MainApp()
+    app.protocol("WM_DELETE_WINDOW", app.on_closing)
     app.mainloop() 

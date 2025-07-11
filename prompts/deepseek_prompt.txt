@@ -4,14 +4,27 @@ HS Code: {hs_code}
 Product: {keyword}
 Country/Region: {country}
 
-Return a numbered list of all real, verifiable, and currently active companies you can find (minimum 20, ideally more). If the list is long, return results in multiple parts (Part 1, Part 2, etc.), or chunked by region. Do not stop at 10.
+IMPORTANT: Return a numbered list of all real, verifiable, and currently active companies you can find (minimum 20, ideally more). If the list is long, return results in multiple parts (Part 1, Part 2, etc.), or chunked by region. Do not stop at 10.
 
-For each, provide:
-- Company Name
-- Country
-- Website
-- Brief Description
+For each company, you MUST provide ALL of the following information in this exact format:
 
-Only include importers, buyers, and distributors (not manufacturers). Only return real information. If none is found, respond: "No verified buyers found."
+1. **Company Name**: [Full company name]
+   - **Country**: [Country where the company is located]
+   - **Website**: [Company website URL - if no website, write "No website available"]
+   - **Description**: [Brief description of what the company does, their business focus, and why they would import/buy this product]
 
-Prioritize companies with recent activity in the last 3 years. Focus on importers, distributors, or buyers, not manufacturers. 
+2. **Company Name**: [Full company name]
+   - **Country**: [Country where the company is located]
+   - **Website**: [Company website URL - if no website, write "No website available"]
+   - **Description**: [Brief description of what the company does, their business focus, and why they would import/buy this product]
+
+REQUIREMENTS:
+- Only include importers, buyers, and distributors (not manufacturers)
+- Only return real, verifiable information
+- Each company MUST have all 4 fields: Company Name, Country, Website, Description
+- If you cannot find a website, write "No website available" but still provide the other information
+- If you cannot find a description, write "Import/distribution company" as the description
+- Prioritize companies with recent activity in the last 3 years
+- Focus on importers, distributors, or buyers, not manufacturers
+
+If none is found, respond: "No verified buyers found." 

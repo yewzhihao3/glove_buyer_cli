@@ -3,7 +3,8 @@ import sqlite3
 from datetime import datetime
 from typing import List, Dict, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'database.db')
+# Always use the project root database
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'database.db'))
 
 def load_unified_countries() -> List[str]:
     """Load all countries from both asia_countries.txt and global_countries.txt"""
@@ -241,4 +242,91 @@ def get_all_contacts():
     rows = c.fetchall()
     columns = [desc[0] for desc in c.description]
     conn.close()
+    return [dict(zip(columns, row)) for row in rows] 
+
+def init_deepseek_results_table():
+    """Initialize the deepseek_buyer_search_results table"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS deepseek_buyer_search_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hs_code TEXT NOT NULL,
+            keyword TEXT NOT NULL,
+            country TEXT NOT NULL,
+            company_name TEXT NOT NULL,
+            company_country TEXT,
+            company_website_link TEXT,
+            description TEXT,
+            source TEXT DEFAULT 'DeepSeek',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(hs_code, keyword, country, company_name)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def insert_deepseek_results(hs_code: str, keyword: str, country: str, companies: List[Dict]):
+    """
+    Insert DeepSeek buyer search results into the database.
+    Each company dict should have: company_name, company_country, company_website_link, description
+    """
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    saved_count = 0
+    for company in companies:
+        try:
+            c.execute('''
+                INSERT OR IGNORE INTO deepseek_buyer_search_results
+                (hs_code, keyword, country, company_name, company_country, company_website_link, description, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                hs_code,
+                keyword,
+                country,
+                company.get('company_name', ''),
+                company.get('company_country', ''),
+                company.get('company_website_link', ''),
+                company.get('description', ''),
+                'DeepSeek'
+            ))
+            if c.rowcount > 0:
+                saved_count += 1
+        except Exception as e:
+            print(f"Error inserting company {company.get('company_name', '')}: {e}")
+    
+    conn.commit()
+    conn.close()
+    return saved_count
+
+def get_deepseek_results(hs_code: str = None, keyword: str = None, country: str = None) -> List[Dict]:
+    """
+    Get DeepSeek buyer search results with optional filters
+    """
+    init_deepseek_results_table()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    query = 'SELECT * FROM deepseek_buyer_search_results WHERE 1=1'
+    params = []
+    
+    if hs_code:
+        query += ' AND hs_code = ?'
+        params.append(hs_code)
+    if keyword:
+        query += ' AND keyword = ?'
+        params.append(keyword)
+    if country:
+        query += ' AND country = ?'
+        params.append(country)
+    
+    query += ' ORDER BY created_at DESC'
+    
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    
+    columns = ['id', 'hs_code', 'keyword', 'country', 'company_name', 'company_country', 'company_website_link', 'description', 'source', 'created_at']
     return [dict(zip(columns, row)) for row in rows] 
