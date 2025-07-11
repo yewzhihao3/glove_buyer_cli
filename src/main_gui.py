@@ -111,12 +111,11 @@ def run_in_background(func, callback=None, error_callback=None, *args, **kwargs)
     task_manager.submit_task(func, callback, error_callback, *args, **kwargs)
 
 NAV_LABELS = [
-    "Dashboard",
+    "HS Code",
     "Quick Buyer Search (AI)",
     "AI Buyer Results",
     "Verified Buyer Leads (Apollo)",
     "Buyer List (Apollo)",
-    "HS Code",
     "Export",
     "Settings"
 ]
@@ -125,33 +124,299 @@ class DashboardContent(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="#F5F7FA")
         self._build_ui()
+        self.load_dashboard_data()
+        
     def _build_ui(self):
-        # App Title
-        title = ctk.CTkLabel(self, text="Glove Buyer Intelligence Dashboard", font=("Poppins", 28, "bold"), text_color="#2E3A59")
+        # Title
+        title = ctk.CTkLabel(self, text="Glove Buyer Intelligence Dashboard", 
+                            font=("Poppins", 28, "bold"), text_color="#2E3A59")
         title.pack(pady=(32, 12))
-        # Quick Stats Frame
+        
+        # Simple Stats Frame
         stats_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
         stats_frame.pack(pady=8, padx=32, fill="x")
-        stats_frame.grid_columnconfigure((0,1,2), weight=1)
-        ctk.CTkLabel(stats_frame, text="Total Buyers", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=0, padx=24, pady=16)
-        ctk.CTkLabel(stats_frame, text="0", font=("Poppins", 22, "bold"), text_color="#0078D4").grid(row=1, column=0)
-        ctk.CTkLabel(stats_frame, text="Companies", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=1, padx=24, pady=16)
-        ctk.CTkLabel(stats_frame, text="0", font=("Poppins", 22, "bold"), text_color="#0078D4").grid(row=1, column=1)
+        stats_frame.grid_columnconfigure((0,1,2,3), weight=1)
+        
+        # AI Results
+        ctk.CTkLabel(stats_frame, text="AI Buyer Results", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=0, padx=24, pady=16)
+        self.ai_count_label = ctk.CTkLabel(stats_frame, text="Loading...", font=("Poppins", 22, "bold"), text_color="#0078D4")
+        self.ai_count_label.grid(row=1, column=0)
+        
+        # Apollo Contacts
+        ctk.CTkLabel(stats_frame, text="Verified Contacts", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=1, padx=24, pady=16)
+        self.apollo_count_label = ctk.CTkLabel(stats_frame, text="Loading...", font=("Poppins", 22, "bold"), text_color="#4CAF50")
+        self.apollo_count_label.grid(row=1, column=1)
+        
+        # HS Codes
         ctk.CTkLabel(stats_frame, text="HS Codes", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=2, padx=24, pady=16)
-        ctk.CTkLabel(stats_frame, text="0", font=("Poppins", 22, "bold"), text_color="#0078D4").grid(row=1, column=2)
+        self.hs_count_label = ctk.CTkLabel(stats_frame, text="Loading...", font=("Poppins", 22, "bold"), text_color="#FF9800")
+        self.hs_count_label.grid(row=1, column=2)
+        
+        # Companies
+        ctk.CTkLabel(stats_frame, text="Companies", font=("Poppins", 16), text_color="#6B7C93").grid(row=0, column=3, padx=24, pady=16)
+        self.company_count_label = ctk.CTkLabel(stats_frame, text="Loading...", font=("Poppins", 22, "bold"), text_color="#9C27B0")
+        self.company_count_label.grid(row=1, column=3)
+        
         # Quick Actions Frame
         actions_frame = ctk.CTkFrame(self, fg_color="#F5F7FA", corner_radius=16)
         actions_frame.pack(pady=24, padx=32, fill="x")
         actions_frame.grid_columnconfigure((0,1,2,3), weight=1)
-        ctk.CTkButton(actions_frame, text="Buyer Search", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=0, padx=18, pady=18, sticky="ew")
-        ctk.CTkButton(actions_frame, text="Potential Buyer Leads", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=1, padx=18, pady=18, sticky="ew")
-        ctk.CTkButton(actions_frame, text="HS Code Manager", fg_color="#0078D4", hover_color="#005A9E", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=2, padx=18, pady=18, sticky="ew")
-        ctk.CTkButton(actions_frame, text="Export", fg_color="#4CAF50", hover_color="#388E3C", text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=3, padx=18, pady=18, sticky="ew")
-        # Recent Activity Placeholder
-        recent_frame = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16)
-        recent_frame.pack(pady=8, padx=32, fill="both", expand=True)
+        
+        ctk.CTkButton(actions_frame, text="Buyer Search", fg_color="#0078D4", hover_color="#005A9E", 
+                     text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=0, padx=18, pady=18, sticky="ew")
+        ctk.CTkButton(actions_frame, text="View Leads", fg_color="#0078D4", hover_color="#005A9E", 
+                     text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=1, padx=18, pady=18, sticky="ew")
+        ctk.CTkButton(actions_frame, text="HS Code Manager", fg_color="#0078D4", hover_color="#005A9E", 
+                     text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=2, padx=18, pady=18, sticky="ew")
+        ctk.CTkButton(actions_frame, text="Export", fg_color="#4CAF50", hover_color="#388E3C", 
+                     text_color="#FFFFFF", font=("Poppins", 15, "bold"), corner_radius=8).grid(row=0, column=3, padx=18, pady=18, sticky="ew")
+        
+        # Charts and Activity Frame
+        charts_activity_frame = ctk.CTkFrame(self, fg_color="transparent")
+        charts_activity_frame.pack(pady=8, padx=32, fill="both", expand=True)
+        charts_activity_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # Country Distribution Chart Frame
+        chart_frame = ctk.CTkFrame(charts_activity_frame, fg_color="#FFFFFF", corner_radius=16)
+        chart_frame.grid(row=0, column=0, padx=(0, 8), pady=0, sticky="ew")
+        ctk.CTkLabel(chart_frame, text="🌍 Company Distribution by Country", font=("Poppins", 18, "bold"), text_color="#2E3A59").pack(pady=(16,8))
+        
+        # Chart text area
+        self.chart_text = ctk.CTkTextbox(chart_frame, font=("Consolas", 11), 
+                                        fg_color="#F8F9FA", text_color="#2E3A59", height=200)
+        self.chart_text.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        
+        # Recent Activity Frame
+        recent_frame = ctk.CTkFrame(charts_activity_frame, fg_color="#FFFFFF", corner_radius=16)
+        recent_frame.grid(row=0, column=1, padx=(8, 0), pady=0, sticky="ew")
         ctk.CTkLabel(recent_frame, text="Recent Activity", font=("Poppins", 18, "bold"), text_color="#2E3A59").pack(pady=(16,8))
-        ctk.CTkLabel(recent_frame, text="No recent activity yet.", font=("Poppins", 15), text_color="#B0BEC5").pack(pady=(0,16))
+        
+        # Activity text area
+        self.activity_text = ctk.CTkTextbox(recent_frame, font=("Consolas", 12), 
+                                           fg_color="#F8F9FA", text_color="#2E3A59", height=200)
+        self.activity_text.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        
+
+        
+
+        
+
+        
+    def load_dashboard_data(self):
+        """Load dashboard data directly without background tasks"""
+        try:
+            print("Starting dashboard data load...")
+            import GUI_db
+            
+            # Initialize database tables first
+            GUI_db.init_db()
+            GUI_db.init_apollo_db()
+            GUI_db.init_deepseek_results_table()
+            
+            print("Database tables initialized")
+            
+            # Get all data with error handling for each
+            try:
+                ai_results = GUI_db.get_all_deepseek_results()
+                print(f"AI results loaded: {len(ai_results)}")
+            except Exception as e:
+                print(f"Error loading AI results: {e}")
+                ai_results = []
+            
+            try:
+                apollo_contacts = GUI_db.get_all_contacts()
+                print(f"Apollo contacts loaded: {len(apollo_contacts)}")
+            except Exception as e:
+                print(f"Error loading Apollo contacts: {e}")
+                apollo_contacts = []
+            
+            try:
+                hs_codes = GUI_db.get_all_hs_codes()
+                print(f"HS codes loaded: {len(hs_codes)}")
+            except Exception as e:
+                print(f"Error loading HS codes: {e}")
+                hs_codes = []
+            
+            try:
+                companies = GUI_db.get_all_companies()
+                print(f"Companies loaded: {len(companies)}")
+            except Exception as e:
+                print(f"Error loading companies: {e}")
+                companies = []
+            
+            print("All data loaded successfully")
+            
+            data = {
+                'counts': {
+                    'ai': len(ai_results),
+                    'apollo': len(apollo_contacts),
+                    'hs': len(hs_codes),
+                    'companies': len(companies)
+                },
+                'activity': self._generate_simple_activity(ai_results, apollo_contacts, hs_codes),
+                'chart': self._generate_country_chart(ai_results, apollo_contacts)
+            }
+            
+            self._update_dashboard_ui(data)
+            
+        except Exception as e:
+            print(f"Error loading dashboard data: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error state
+            self._update_dashboard_ui({
+                'counts': {'ai': 0, 'apollo': 0, 'hs': 0, 'companies': 0},
+                'activity': f"Error loading dashboard data: {e}",
+                'chart': "Error loading chart data"
+            })
+        
+    def _update_dashboard_ui(self, data):
+        """Update dashboard UI with loaded data"""
+        # Update statistics
+        self.ai_count_label.configure(text=str(data['counts']['ai']))
+        self.apollo_count_label.configure(text=str(data['counts']['apollo']))
+        self.hs_count_label.configure(text=str(data['counts']['hs']))
+        self.company_count_label.configure(text=str(data['counts']['companies']))
+        
+        # Update chart
+        self.chart_text.delete("1.0", "end")
+        self.chart_text.insert("1.0", data['chart'])
+        
+        # Update activity
+        self.activity_text.delete("1.0", "end")
+        self.activity_text.insert("1.0", data['activity'])
+    
+    def _generate_simple_activity(self, ai_results, contacts, hs_codes):
+        """Generate simple activity summary"""
+        activity = "Recent Activity Summary:\n\n"
+        
+        # Show recent AI results
+        if ai_results:
+            recent_ai = ai_results[-5:]  # Last 5
+            activity += f"🤖 Recent AI Searches ({len(ai_results)} total):\n"
+            for result in recent_ai:
+                activity += f"  • {result.get('keyword', '')} in {result.get('country', '')}\n"
+            activity += "\n"
+        
+        # Show recent contacts
+        if contacts:
+            recent_contacts = contacts[-3:]  # Last 3
+            activity += f"👥 Recent Contacts ({len(contacts)} total):\n"
+            for contact in recent_contacts:
+                activity += f"  • {contact.get('name', '')} - {contact.get('company_name', '')}\n"
+            activity += "\n"
+        
+        # Show recent HS codes
+        if hs_codes:
+            recent_hs = hs_codes[-3:]  # Last 3
+            activity += f"🏷️ Recent HS Codes ({len(hs_codes)} total):\n"
+            for hs_code in recent_hs:
+                activity += f"  • {hs_code.get('hs_code', '')} - {hs_code.get('description', '')}\n"
+        
+        if not ai_results and not contacts and not hs_codes:
+            activity += "No recent activity found."
+        
+        return activity
+    
+    def _generate_country_chart(self, ai_results, contacts):
+        """Generate country distribution chart"""
+        from collections import Counter
+        import GUI_db
+        
+        # Collect all countries from AI results and contacts
+        all_countries = []
+        
+        # From AI results
+        for result in ai_results:
+            country = result.get('company_country', 'Unknown')
+            if country and country != 'Unknown':
+                all_countries.append(country)
+        
+        # From contacts - get country from companies table
+        try:
+            companies = GUI_db.get_all_companies()
+            company_countries = {company['id']: company.get('country', 'Unknown') for company in companies}
+            
+            for contact in contacts:
+                company_id = contact.get('company_id')
+                if company_id and company_id in company_countries:
+                    country = company_countries[company_id]
+                    if country and country != 'Unknown':
+                        all_countries.append(country)
+        except Exception as e:
+            print(f"Error getting company countries: {e}")
+        
+        if not all_countries:
+            return "No country data available"
+        
+        # Count countries
+        country_counts = Counter(all_countries)
+        
+        # Generate chart
+        chart = "🌍 Company Distribution by Country\n"
+        chart += "=" * 40 + "\n\n"
+        
+        total = len(all_countries)
+        max_count = max(country_counts.values()) if country_counts else 1
+        
+        # Sort by count (descending)
+        sorted_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)
+        
+        for i, (country, count) in enumerate(sorted_countries[:10], 1):  # Show top 10
+            percentage = round((count / total) * 100, 1)
+            bar_length = int((count / max_count) * 30)  # Scale bar to max 30 characters
+            bar = "█" * bar_length + "░" * (30 - bar_length)
+            
+            chart += f"{i:2d}. {country:<20} {count:3d} ({percentage:4.1f}%)\n"
+            chart += f"    {bar}\n\n"
+        
+        chart += f"\n📊 Total Companies: {total}"
+        chart += f"\n🏆 Top Country: {sorted_countries[0][0] if sorted_countries else 'N/A'}"
+        
+        return chart
+        
+
+    
+
+    
+    def _format_time_ago(self, date_str):
+        """Format date as time ago"""
+        if not date_str:
+            return "Unknown"
+        
+        try:
+            date = self._parse_date(date_str)
+            now = datetime.now()
+            diff = now - date
+            
+            if diff.days > 0:
+                return f"{diff.days} day{'s' if diff.days != 1 else ''} ago"
+            elif diff.seconds > 3600:
+                hours = diff.seconds // 3600
+                return f"{hours} hour{'s' if hours != 1 else ''} ago"
+            else:
+                minutes = diff.seconds // 60
+                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        except:
+            return "Unknown"
+    
+    def _parse_date(self, date_str):
+        """Parse date string to datetime object"""
+        if not date_str:
+            return datetime.min
+        try:
+            for fmt in ['%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+            return datetime.min
+        except:
+            return datetime.min
+    
+
+    
+
 
 class BuyerSearchPage(ctk.CTkFrame):
     def __init__(self, master):
@@ -738,7 +1003,7 @@ class DeepSeekBuyerResultsPage(ctk.CTkFrame):
 
     def populate_table(self):
         """Populate the table with DeepSeek results, sorted by ID ascending by default"""
-        def load_table_data():
+        try:
             search_term = self.search_var.get().strip()
             selected_country = self.country_var.get().strip()
             # Get all results first
@@ -755,15 +1020,15 @@ class DeepSeekBuyerResultsPage(ctk.CTkFrame):
                 results = filtered_results
             # Sort by id ascending
             results = sorted(results, key=lambda x: x.get('id', 0))
-            return results
-        def on_data_loaded(data):
-            self.after(0, lambda: self._update_table_ui(data))
+            
+            # Update UI directly on main thread
+            self._update_table_ui(results)
             # Also refresh country list to include any new countries
-            self.after(0, lambda: self.refresh_country_list())
-        def on_error(error):
+            self.refresh_country_list()
+            
+        except Exception as error:
             print(f"Error loading DeepSeek results: {error}")
-            self.after(0, lambda: self._clear_table_ui())
-        run_in_background(load_table_data, on_data_loaded, on_error)
+            self._clear_table_ui()
 
     def _add_table_sorting(self):
         """Enable sorting by clicking column headers"""
@@ -1109,64 +1374,52 @@ class ExportPage(ctk.CTkFrame):
 
     def load_data_counts(self):
         """Load and display data counts for each source"""
-        def load_counts():
-            try:
-                # AI Buyer Results count
-                ai_count = len(GUI_db.get_all_deepseek_results())
-                
-                # Apollo Buyer List count
-                apollo_count = len(GUI_db.get_all_contacts())
-                
-                # HS Codes count
-                hs_count = len(GUI_db.get_all_hs_codes())
-                
-                # Companies count
-                company_count = len(GUI_db.get_all_companies())
-                
-                # Get unique countries for filter
-                countries = set()
-                for result in GUI_db.get_all_deepseek_results():
-                    if result.get('company_country'):
-                        countries.add(result['company_country'])
-                for contact in GUI_db.get_all_contacts():
-                    if contact.get('company_name'):
-                        # Extract country from company name or use a default
-                        countries.add("Unknown")
-                for hs_code in GUI_db.get_all_hs_codes():
-                    if hs_code.get('country'):
-                        countries.add(hs_code['country'])
-                
-                return {
-                    'ai_count': ai_count,
-                    'apollo_count': apollo_count,
-                    'hs_count': hs_count,
-                    'company_count': company_count,
-                    'countries': sorted(list(countries))
-                }
-            except Exception as e:
-                print(f"Error loading data counts: {e}")
-                return {
-                    'ai_count': 0,
-                    'apollo_count': 0,
-                    'hs_count': 0,
-                    'company_count': 0,
-                    'countries': ["All"]
-                }
-        
-        def on_counts_loaded(counts):
-            self.after(0, lambda: self._update_counts_ui(counts))
-        
-        def on_error(error):
-            print(f"Error loading counts: {error}")
-            self.after(0, lambda: self._update_counts_ui({
+        try:
+            # AI Buyer Results count
+            ai_count = len(GUI_db.get_all_deepseek_results())
+            
+            # Apollo Buyer List count
+            apollo_count = len(GUI_db.get_all_contacts())
+            
+            # HS Codes count
+            hs_count = len(GUI_db.get_all_hs_codes())
+            
+            # Companies count
+            company_count = len(GUI_db.get_all_companies())
+            
+            # Get unique countries for filter
+            countries = set()
+            for result in GUI_db.get_all_deepseek_results():
+                if result.get('company_country'):
+                    countries.add(result['company_country'])
+            for contact in GUI_db.get_all_contacts():
+                if contact.get('company_name'):
+                    # Extract country from company name or use a default
+                    countries.add("Unknown")
+            for hs_code in GUI_db.get_all_hs_codes():
+                if hs_code.get('country'):
+                    countries.add(hs_code['country'])
+            
+            counts = {
+                'ai_count': ai_count,
+                'apollo_count': apollo_count,
+                'hs_count': hs_count,
+                'company_count': company_count,
+                'countries': sorted(list(countries))
+            }
+            
+            # Update UI directly on main thread
+            self._update_counts_ui(counts)
+            
+        except Exception as error:
+            print(f"Error loading data counts: {error}")
+            self._update_counts_ui({
                 'ai_count': 0,
                 'apollo_count': 0,
                 'hs_count': 0,
                 'company_count': 0,
                 'countries': ["All"]
-            }))
-        
-        run_in_background(load_counts, on_counts_loaded, on_error)
+            })
 
     def _update_counts_ui(self, counts):
         """Update the count labels on main thread"""
@@ -1817,7 +2070,7 @@ class HSCodePage(ctk.CTkFrame):
         delete_btn.pack(side="right", padx=(0, 12))
 
     def populate_table(self):
-        def load_table_data():
+        try:
             country = self.country_var.get()
             query = self.search_var.get().strip().lower()
             if country == "All":
@@ -1832,13 +2085,13 @@ class HSCodePage(ctk.CTkFrame):
                 filtered_data.append(entry)
             # Sort by country and hs_code ascending
             filtered_data = sorted(filtered_data, key=lambda x: (x.get('country', ''), x.get('hs_code', '')))
-            return filtered_data
-        def on_data_loaded(data):
-            self.after(0, lambda: self._update_table_ui(data))
-        def on_error(error):
+            
+            # Update UI directly on main thread
+            self._update_table_ui(filtered_data)
+            
+        except Exception as error:
             print(f"Error loading table data: {error}")
-            self.after(0, lambda: self._clear_table_ui())
-        run_in_background(load_table_data, on_data_loaded, on_error)
+            self._clear_table_ui()
 
     def _add_table_sorting(self):
         for col in self.table['columns']:
@@ -3108,7 +3361,7 @@ class KeywordSelectorDialog(ctk.CTkToplevel):
 class MainApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Glove Buyer Intelligence Dashboard")
+        self.title("Glove Buyer App")
         # Launch in fullscreen more reliably
         self.after(10, self.maximize_window)
         self.configure(bg="#F5F7FA")
@@ -3139,12 +3392,11 @@ class MainApp(ctk.CTk):
         self.content_frame = ctk.CTkFrame(self, fg_color="#F5F7FA")
         self.content_frame.pack(side="left", fill="both", expand=True)
         self.pages = [
-            DashboardContent(self.content_frame),
+            HSCodePage(self.content_frame),
             BuyerSearchPage(self.content_frame),
             DeepSeekBuyerResultsPage(self.content_frame),
             ApolloPage(self.content_frame),
             ApolloBuyerListPage(self.content_frame),
-            HSCodePage(self.content_frame),
             ExportPage(self.content_frame),
             ctk.CTkFrame(self.content_frame, fg_color="#F5F7FA"),  # Placeholder for Settings
         ]
